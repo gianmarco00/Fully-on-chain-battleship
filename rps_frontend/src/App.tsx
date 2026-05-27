@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { assertCorrectChain, readNextGameId } from "./utils/contract";
 import { GameControls } from "./components/GameControls";
 import { GameStatePanel } from "./components/GameStatePanel";
+import { GameWindow } from "./components/GameWindow";
 import { loadGameState } from "./utils/gameState";
 import type { GameStateView } from "./utils/gameState";
 
@@ -15,10 +16,12 @@ import {
   shortenAddress,
   switchToUzhethNetwork,
 } from "./utils/wallet";
+import { devLog } from "./utils/devLog";
+import { openGameWindow } from "./utils/gameWindow";
 
 import "./styles.css";
 
-function App() {
+function MainApp() {
   const [address, setAddress] = useState<string | null>(null);
   const [chainId, setChainId] = useState<string | null>(null);
   const [message, setMessage] = useState<string>("");
@@ -34,14 +37,20 @@ function App() {
   const correctChain = isCorrectChain(chainId);
 
   async function refreshWalletState() {
+    devLog("app:refreshWalletState:start");
     const accounts = await getCurrentAccounts();
     const currentChainId = await getCurrentChainId();
 
     setAddress(accounts[0] ?? null);
     setChainId(currentChainId);
+    devLog("app:refreshWalletState:success", {
+      address: accounts[0] ?? null,
+      chainId: currentChainId,
+    });
   }
 
   async function handleReadContract() {
+    devLog("app:readNextGameId:click");
     try {
       setMessage("");
   
@@ -49,12 +58,15 @@ function App() {
   
       const value = await readNextGameId();
       setNextGameId(value.toString());
+      devLog("app:readNextGameId:success", { value });
     } catch (error) {
+      devLog("app:readNextGameId:error", { error });
       setMessage(error instanceof Error ? error.message : "Contract read failed.");
     }
   }
 
   async function handleConnect() {
+    devLog("app:connectWallet:click");
     try {
       setMessage("");
 
@@ -62,18 +74,23 @@ function App() {
 
       setAddress(connection.address);
       setChainId(connection.chainId);
+      devLog("app:connectWallet:success", connection);
     } catch (error) {
+      devLog("app:connectWallet:error", { error });
       setMessage(error instanceof Error ? error.message : "Wallet connection failed.");
     }
   }
 
   async function handleSwitchNetwork() {
+    devLog("app:switchNetwork:click");
     try {
       setMessage("");
 
       await switchToUzhethNetwork();
       await refreshWalletState();
+      devLog("app:switchNetwork:success");
     } catch (error) {
+      devLog("app:switchNetwork:error", { error });
       setMessage(error instanceof Error ? error.message : "Network switch failed.");
     }
   }
@@ -89,6 +106,7 @@ function App() {
   }
 
   async function loadGameByInput(input: string) {
+    devLog("app:loadGame:start", { input });
     try {
       setGameStateMessage("");
       setGameStateLoading(true);
@@ -98,7 +116,16 @@ function App() {
 
       const loadedState = await loadGameState(gameId);
       setGameState(loadedState);
+      devLog("app:loadGame:success", {
+        gameId,
+        phase: loadedState.phaseName,
+        player1: loadedState.player1,
+        player2: loadedState.player2,
+        player1Committed: loadedState.player1Committed,
+        player2Committed: loadedState.player2Committed,
+      });
     } catch (error) {
+      devLog("app:loadGame:error", { input, error });
       setGameState(null);
       setGameStateMessage(
         error instanceof Error ? error.message : "Failed to load game."
@@ -109,12 +136,15 @@ function App() {
   }
 
   async function handleLoadGame() {
+    devLog("app:loadGame:click", { gameIdInput });
     await loadGameByInput(gameIdInput);
   }
 
   function handleGameUpdated(gameId: bigint) {
+    devLog("app:gameUpdated", { gameId });
     const gameIdText = gameId.toString();
     setGameIdInput(gameIdText);
+    openGameWindow(gameId, address ?? undefined);
 
     loadGameByInput(gameIdText).catch(() => {
       // Errors are already handled in loadGameByInput.
@@ -242,6 +272,21 @@ function App() {
       </section>
     </main>
   );
+}
+
+function App() {
+  const params = new URLSearchParams(window.location.search);
+  const isGameWindow = params.get("mode") === "game";
+  const gameWindowId = params.get("gameId");
+  const playerAddress = params.get("player");
+
+  if (isGameWindow && gameWindowId && /^\d+$/.test(gameWindowId)) {
+    return (
+      <GameWindow gameId={BigInt(gameWindowId)} playerAddress={playerAddress} />
+    );
+  }
+
+  return <MainApp />;
 }
 
 export default App;

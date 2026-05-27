@@ -173,3 +173,88 @@ input {
 .contract-box strong {
   overflow-wrap: anywhere;
 }
+
+.game-window-page {
+  padding: 20px;
+}
+
+.game-window-card {
+  width: min(520px, 100%);
+}
+
+.lobby-messages {
+  display: grid;
+  gap: 8px;
+  margin-top: 20px;
+}
+
+.lobby-messages > div {
+  border-radius: 12px;
+  padding: 12px 14px;
+  color: #065f46;
+  background: #d1fae5;
+}
+
+.move-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 24px;
+}
+
+.commit-status {
+  display: grid;
+  gap: 8px;
+  margin-top: 16px;
+  color: #6b7280;
+}
+
+.commit-status > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.finish-screen {
+  border-radius: 20px;
+  padding: 24px;
+  color: #111827;
+  background: linear-gradient(135deg, #f8fafc, #eef2ff);
+}
+
+.finish-screen h1 {
+  font-size: 48px;
+}
+
+.finish-screen p {
+  margin: 14px 0 0;
+  color: #4b5563;
+  line-height: 1.5;
+}
+
+.finish-screen-win {
+  background: linear-gradient(135deg, #dcfce7, #fef9c3);
+}
+
+.finish-screen-lose {
+  background: linear-gradient(135deg, #fee2e2, #f8fafc);
+}
+
+.finish-screen-draw {
+  background: linear-gradient(135deg, #e0f2fe, #f8fafc);
+}
+
+.finish-details {
+  display: grid;
+  gap: 10px;
+  margin-top: 20px;
+}
+
+.finish-details > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  border-radius: 12px;
+  padding: 12px 14px;
+  background: rgb(255 255 255 / 70%);
+}

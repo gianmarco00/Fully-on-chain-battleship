@@ -1,4 +1,5 @@
 import { UZHETH_CHAIN_ID_HEX, UZHETH_NETWORK } from "../config/chain";
+import { devLog, devTrace } from "./devLog";
 
 export type WalletConnection = {
   address: string;
@@ -10,26 +11,34 @@ export function hasMetaMask(): boolean {
 }
 
 export async function getCurrentChainId(): Promise<string | null> {
+  devTrace("wallet:getCurrentChainId:start");
+
   if (!window.ethereum) return null;
 
   const chainId = await window.ethereum.request({
     method: "eth_chainId",
   });
 
+  devTrace("wallet:getCurrentChainId:success", { chainId });
   return String(chainId);
 }
 
 export async function getCurrentAccounts(): Promise<string[]> {
+  devTrace("wallet:getCurrentAccounts:start");
+
   if (!window.ethereum) return [];
 
   const accounts = await window.ethereum.request({
     method: "eth_accounts",
   });
 
+  devTrace("wallet:getCurrentAccounts:success", { accounts });
   return accounts as string[];
 }
 
 export async function connectWallet(): Promise<WalletConnection> {
+  devLog("wallet:connect:start");
+
   if (!window.ethereum) {
     throw new Error("MetaMask is not available in this browser.");
   }
@@ -50,6 +59,11 @@ export async function connectWallet(): Promise<WalletConnection> {
     throw new Error("Could not read current chain ID.");
   }
 
+  devLog("wallet:connect:success", {
+    address: accountList[0],
+    chainId,
+  });
+
   return {
     address: accountList[0],
     chainId,
@@ -57,6 +71,8 @@ export async function connectWallet(): Promise<WalletConnection> {
 }
 
 export async function switchToUzhethNetwork(): Promise<void> {
+  devLog("wallet:switchNetwork:start", { chainId: UZHETH_CHAIN_ID_HEX });
+
   if (!window.ethereum) {
     throw new Error("MetaMask is not available in this browser.");
   }
@@ -66,18 +82,22 @@ export async function switchToUzhethNetwork(): Promise<void> {
       method: "wallet_switchEthereumChain",
       params: [{ chainId: UZHETH_CHAIN_ID_HEX }],
     });
+    devLog("wallet:switchNetwork:success", { chainId: UZHETH_CHAIN_ID_HEX });
   } catch (error) {
     const switchError = error as { code?: number };
 
     // 4902 means MetaMask does not know this network yet.
     if (switchError.code !== 4902) {
+      devLog("wallet:switchNetwork:error", { error });
       throw error;
     }
 
+    devLog("wallet:addNetwork:start", { chainId: UZHETH_CHAIN_ID_HEX });
     await window.ethereum.request({
       method: "wallet_addEthereumChain",
       params: [UZHETH_NETWORK],
     });
+    devLog("wallet:addNetwork:success", { chainId: UZHETH_CHAIN_ID_HEX });
   }
 }
 

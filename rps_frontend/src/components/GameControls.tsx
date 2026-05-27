@@ -8,6 +8,7 @@ import {
   readNextGameId,
   waitForTransaction,
 } from "../utils/contract";
+import { devLog } from "../utils/devLog";
 
 type GameControlsProps = {
   connected: boolean;
@@ -47,9 +48,12 @@ export function GameControls({
   const [txHash, setTxHash] = useState<string | null>(null);
 
   async function handleCreateGame() {
+    devLog("ui:createGame:click", { address });
+
     if (!address) {
       setStatusType("error");
       setStatusMessage("Connect MetaMask before creating a game.");
+      devLog("ui:createGame:blocked", { reason: "missing wallet" });
       return;
     }
 
@@ -63,6 +67,7 @@ export function GameControls({
 
       // Read before + after to recover the created game ID in a simple way.
       const gameIdBefore = await readNextGameId();
+      devLog("ui:createGame:nextGameIdBefore", { gameIdBefore });
 
       const hash = await createGame(address);
       setTxHash(hash);
@@ -74,11 +79,18 @@ export function GameControls({
       const gameIdAfter = await readNextGameId();
       const createdGameId =
         gameIdAfter > gameIdBefore ? gameIdAfter - 1n : gameIdBefore;
+      devLog("ui:createGame:confirmed", {
+        hash,
+        gameIdBefore,
+        gameIdAfter,
+        createdGameId,
+      });
 
       setStatusType("success");
       setStatusMessage(`Game created successfully. gameId = ${createdGameId}`);
       onGameUpdated(createdGameId);
     } catch (error) {
+      devLog("ui:createGame:error", { error });
       setStatusType("error");
       setStatusMessage(
         error instanceof Error ? error.message : "Failed to create game."
@@ -89,9 +101,12 @@ export function GameControls({
   }
 
   async function handleJoinGame() {
+    devLog("ui:joinGame:click", { address, joinGameIdInput });
+
     if (!address) {
       setStatusType("error");
       setStatusMessage("Connect MetaMask before joining a game.");
+      devLog("ui:joinGame:blocked", { reason: "missing wallet" });
       return;
     }
 
@@ -104,6 +119,7 @@ export function GameControls({
       await assertCorrectChain();
 
       const gameId = parseGameId(joinGameIdInput);
+      devLog("ui:joinGame:parsedGameId", { gameId });
 
       // Pre-check game constraints so users get readable errors before signing.
       const game = await readGame(gameId);
@@ -111,6 +127,13 @@ export function GameControls({
       const player2 = String(game[1]).toLowerCase();
       const phase = Number(game[3]);
       const sender = address.toLowerCase();
+      devLog("ui:joinGame:precheck", {
+        gameId,
+        player1,
+        player2,
+        phase,
+        sender,
+      });
 
       if (sender === player1) {
         throw new Error(
@@ -127,17 +150,20 @@ export function GameControls({
       }
 
       const hash = await joinGame(gameId, address);
+      devLog("ui:joinGame:txSent", { gameId, hash });
 
       setTxHash(hash);
       setStatusType("info");
       setStatusMessage("Join transaction sent. Waiting for confirmation...");
 
       await waitForTransaction(hash);
+      devLog("ui:joinGame:confirmed", { gameId, hash });
 
       setStatusType("success");
       setStatusMessage(`Joined game ${gameId} successfully.`);
       onGameUpdated(gameId);
     } catch (error) {
+      devLog("ui:joinGame:error", { error });
       setStatusType("error");
       setStatusMessage(
         error instanceof Error ? error.message : "Failed to join game."
