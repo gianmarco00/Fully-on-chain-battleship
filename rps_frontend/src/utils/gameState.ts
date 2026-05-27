@@ -48,6 +48,15 @@ export type GameStateSummary = {
   revealDeadline: string;
 };
 
+type ParsedGame = {
+  player1: string;
+  player2: string;
+  winner: string;
+  phase: number;
+  commitDeadline: bigint;
+  revealDeadline: bigint;
+};
+
 function asBigInt(value: unknown): bigint {
   if (typeof value === "bigint") return value;
   if (typeof value === "number") return BigInt(value);
@@ -66,6 +75,49 @@ function isZeroCommitment(commitment: string): boolean {
 
 function moveName(move: number): string {
   return MOVE_NAMES[move] ?? "Unknown";
+}
+
+function parseGame(game: readonly unknown[]): ParsedGame {
+  if (game.length !== 6) {
+    throw new Error("Unexpected getGame() response format.");
+  }
+
+  const [player1, player2, winner, phaseRaw, commitDeadlineRaw, revealDeadlineRaw] =
+    game;
+
+  return {
+    player1: String(player1),
+    player2: String(player2),
+    winner: String(winner),
+    phase: Number(asBigInt(phaseRaw)),
+    commitDeadline: asBigInt(commitDeadlineRaw),
+    revealDeadline: asBigInt(revealDeadlineRaw),
+  };
+}
+
+function buildGameStateView(
+  gameId: bigint,
+  game: ParsedGame,
+  details: {
+    player1Committed: boolean;
+    player2Committed: boolean;
+    player1Revealed: boolean;
+    player2Revealed: boolean;
+    player1MoveName: string;
+    player2MoveName: string;
+  }
+): GameStateView {
+  return {
+    gameId,
+    player1: game.player1,
+    player2: game.player2,
+    winner: game.winner,
+    phase: game.phase,
+    phaseName: PHASE_NAMES[game.phase] ?? "Unknown",
+    commitDeadline: game.commitDeadline,
+    revealDeadline: game.revealDeadline,
+    ...details,
+  };
 }
 
 export function formatDeadline(timestamp: bigint): string {
@@ -133,6 +185,24 @@ export function logGameStateSnapshot(
   });
 }
 
+export async function loadGameHeader(gameId: bigint): Promise<GameStateView> {
+  devTrace("gameState:loadHeader:start", { gameId });
+
+  const game = parseGame(await readGame(gameId));
+  const state = buildGameStateView(gameId, game, {
+    player1Committed: false,
+    player2Committed: false,
+    player1Revealed: false,
+    player2Revealed: false,
+    player1MoveName: "Hidden",
+    player2MoveName: "Hidden",
+  });
+
+  devTrace("gameState:loadHeader:success", summarizeGameState(state));
+
+  return state;
+}
+
 export async function loadGameState(gameId: bigint): Promise<GameStateView> {
   devTrace("gameState:load:start", { gameId });
 
@@ -142,10 +212,6 @@ export async function loadGameState(gameId: bigint): Promise<GameStateView> {
     readReveals(gameId),
   ]);
 
-  if (game.length !== 6) {
-    throw new Error("Unexpected getGame() response format.");
-  }
-
   if (commitments.length !== 2) {
     throw new Error("Unexpected getCommitments() response format.");
   }
@@ -154,15 +220,10 @@ export async function loadGameState(gameId: bigint): Promise<GameStateView> {
     throw new Error("Unexpected getReveals() response format.");
   }
 
-  const [player1, player2, winner, phaseRaw, commitDeadlineRaw, revealDeadlineRaw] =
-    game;
   const [commitment1Raw, commitment2Raw] = commitments;
   const [revealed1Raw, revealed2Raw, move1Raw, move2Raw] = reveals;
 
-  const phase = Number(asBigInt(phaseRaw));
-  const commitDeadline = asBigInt(commitDeadlineRaw);
-  const revealDeadline = asBigInt(revealDeadlineRaw);
-
+  const parsedGame = parseGame(game);
   const commitment1 = String(commitment1Raw);
   const commitment2 = String(commitment2Raw);
 
@@ -172,22 +233,14 @@ export async function loadGameState(gameId: bigint): Promise<GameStateView> {
   const move1 = Number(asBigInt(move1Raw));
   const move2 = Number(asBigInt(move2Raw));
 
-  const state = {
-    gameId,
-    player1: String(player1),
-    player2: String(player2),
-    winner: String(winner),
-    phase,
-    phaseName: PHASE_NAMES[phase] ?? "Unknown",
-    commitDeadline,
-    revealDeadline,
+  const state = buildGameStateView(gameId, parsedGame, {
     player1Committed: !isZeroCommitment(commitment1),
     player2Committed: !isZeroCommitment(commitment2),
     player1Revealed,
     player2Revealed,
     player1MoveName: player1Revealed ? moveName(move1) : "Hidden",
     player2MoveName: player2Revealed ? moveName(move2) : "Hidden",
-  };
+  });
 
   devTrace("gameState:load:success", summarizeGameState(state));
 

@@ -4,6 +4,7 @@ import {
   formatPlayer,
   gameStateKey,
   isZeroAddress,
+  loadGameHeader,
   loadGameState,
   logGameStateSnapshot,
 } from "../utils/gameState";
@@ -32,7 +33,11 @@ type FinishedView = {
   result: "win" | "lose" | "draw" | "viewer";
 };
 
+type RefreshReason = "initial" | "poll" | "lobby-poll" | "focus" | "event";
+
 const POLL_MS = 1000;
+const LOBBY_POLL_MS = 300;
+const PHASE_WAITING = 0;
 const PHASE_COMMIT = 1;
 const PHASE_REVEAL = 2;
 const PHASE_FINISHED = 3;
@@ -166,6 +171,7 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
   const [revealMessage, setRevealMessage] = useState("");
   const [revealError, setRevealError] = useState("");
   const lastStateKey = useRef<string | null>(null);
+  const latestPhase = useRef<number | null>(null);
   const revealAttemptKey = useRef<string | null>(null);
   const revealInFlight = useRef(false);
   const closeAfterFinishStarted = useRef(false);
@@ -180,11 +186,9 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
   useEffect(() => {
     let alive = true;
     let requestInFlight = false;
-    let queuedRefreshReason: "poll" | "focus" | "event" | null = null;
+    let queuedRefreshReason: Exclude<RefreshReason, "initial"> | null = null;
 
-    async function loadWindowState(
-      reason: "initial" | "poll" | "focus" | "event"
-    ) {
+    async function loadWindowState(reason: RefreshReason) {
       if (requestInFlight) {
         queuedRefreshReason = reason === "initial" ? "poll" : reason;
         return;
@@ -193,11 +197,15 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
       requestInFlight = true;
 
       try {
-        const state = await loadGameState(gameId);
+        const state =
+          reason === "lobby-poll" && latestPhase.current === PHASE_WAITING
+            ? await loadGameHeader(gameId)
+            : await loadGameState(gameId);
         const nextLobbyView = buildLobbyView(state, playerAddress);
 
         if (!alive) return;
 
+        latestPhase.current = state.phase;
         setGameState(state);
         setLobbyView(nextLobbyView);
 
@@ -241,10 +249,19 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
 
     loadWindowState("initial");
 
-    // The blockchain is the source of truth, so the popup refreshes by reading it.
+    // Events are fastest, but polling stays as a simple fallback.
     const intervalId = window.setInterval(() => {
-      loadWindowState("poll");
+      if (latestPhase.current !== PHASE_WAITING) {
+        loadWindowState("poll");
+      }
     }, POLL_MS);
+
+    // While player1 is alone in the lobby, getGame() is enough to catch player2.
+    const lobbyIntervalId = window.setInterval(() => {
+      if (latestPhase.current === PHASE_WAITING) {
+        loadWindowState("lobby-poll");
+      }
+    }, LOBBY_POLL_MS);
 
     function refreshOnFocus() {
       loadWindowState("focus");
@@ -275,6 +292,7 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
     return () => {
       alive = false;
       window.clearInterval(intervalId);
+      window.clearInterval(lobbyIntervalId);
       window.removeEventListener("focus", refreshOnFocus);
       document.removeEventListener("visibilitychange", refreshWhenVisible);
       stopWatchingEvents();

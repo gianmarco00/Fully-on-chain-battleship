@@ -1,7 +1,12 @@
-import { createPublicClient, createWalletClient, custom } from "viem";
+import { createPublicClient, createWalletClient, custom, http } from "viem";
 import type { Address, Hash, TransactionReceipt } from "viem";
 
-import { UZHETH_CHAIN, UZHETH_CHAIN_ID_DECIMAL } from "../config/chain";
+import {
+  UZHETH_CHAIN,
+  UZHETH_CHAIN_ID_DECIMAL,
+  UZHETH_CHAIN_ID_HEX,
+  UZHETH_RPC_URL,
+} from "../config/chain";
 import { RPS_ABI, RPS_CONTRACT_ADDRESS } from "../config/contract";
 import { devLog, devTrace } from "./devLog";
 
@@ -40,7 +45,7 @@ function getEthereumProvider() {
 export function createRpsPublicClient() {
   return createPublicClient({
     chain: UZHETH_CHAIN,
-    transport: custom(getEthereumProvider()),
+    transport: http(UZHETH_RPC_URL),
     pollingInterval: FAST_POLLING_INTERVAL_MS,
   });
 }
@@ -380,17 +385,19 @@ export function watchGameEvents(
 
 export async function assertCorrectChain(): Promise<void> {
   devLog("contract:assertCorrectChain:start");
-  const client = createRpsPublicClient();
-  const chainId = await client.getChainId();
+  const chainId = String(
+    await getEthereumProvider().request({ method: "eth_chainId" })
+  );
 
   devLog("contract:assertCorrectChain:read", {
-    expected: UZHETH_CHAIN_ID_DECIMAL,
+    expectedDecimal: UZHETH_CHAIN_ID_DECIMAL,
+    expectedHex: UZHETH_CHAIN_ID_HEX,
     actual: chainId,
   });
 
-  if (chainId !== UZHETH_CHAIN_ID_DECIMAL) {
+  if (chainId.toLowerCase() !== UZHETH_CHAIN_ID_HEX.toLowerCase()) {
     throw new Error(
-      `Wrong chain. Expected ${UZHETH_CHAIN_ID_DECIMAL}, got ${chainId}.`
+      `Wrong chain. Expected ${UZHETH_CHAIN_ID_HEX}, got ${chainId}.`
     );
   }
 }

@@ -2,6 +2,7 @@ import { defineChain } from "viem";
 
 export const UZHETH_CHAIN_ID_DECIMAL = 70207;
 export const UZHETH_CHAIN_ID_HEX = "0x1123f"; // 70207 in hexadecimal
+export const UZHETH_RPC_URL = "http://127.0.0.1:8549";
 
 export const UZHETH_NETWORK = {
   chainId: UZHETH_CHAIN_ID_HEX,
@@ -11,7 +12,7 @@ export const UZHETH_NETWORK = {
     symbol: "UZHETHs",
     decimals: 18,
   },
-  rpcUrls: ["http://127.0.0.1:8549"],
+  rpcUrls: [UZHETH_RPC_URL],
   blockExplorerUrls: [],
 };
 
@@ -25,7 +26,7 @@ export const UZHETH_CHAIN = defineChain({
   },
   rpcUrls: {
     default: {
-      http: ["http://127.0.0.1:8549"],
+      http: [UZHETH_RPC_URL],
     },
   },
 });
