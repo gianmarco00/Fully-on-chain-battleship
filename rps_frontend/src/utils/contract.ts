@@ -7,6 +7,27 @@ import { devLog, devTrace } from "./devLog";
 
 // Match the Python backend's safe transaction gas limit.
 const DEFAULT_WRITE_GAS_LIMIT = 250_000n;
+const FAST_POLLING_INTERVAL_MS = 500;
+
+export type RpsGameEventName =
+  | "GameJoined"
+  | "MoveCommitted"
+  | "MoveRevealed"
+  | "GameFinished"
+  | "GameCancelled";
+
+type GameEvent = {
+  eventName: RpsGameEventName;
+  transactionHash: Hash | null;
+};
+
+const GAME_EVENTS_TO_WATCH: readonly RpsGameEventName[] = [
+  "GameJoined",
+  "MoveCommitted",
+  "MoveRevealed",
+  "GameFinished",
+  "GameCancelled",
+];
 
 function getEthereumProvider() {
   if (!window.ethereum) {
@@ -20,6 +41,7 @@ export function createRpsPublicClient() {
   return createPublicClient({
     chain: UZHETH_CHAIN,
     transport: custom(getEthereumProvider()),
+    pollingInterval: FAST_POLLING_INTERVAL_MS,
   });
 }
 
@@ -309,6 +331,51 @@ export async function waitForTransaction(
     devLog("contract:waitForTransaction:error", { txHash, error });
     throw error;
   }
+}
+
+export function watchGameEvents(
+  gameId: bigint,
+  onEvent: (event: GameEvent) => void
+): () => void {
+  const client = createRpsPublicClient();
+
+  devLog("contract:watchGameEvents:start", {
+    gameId,
+    events: GAME_EVENTS_TO_WATCH,
+    pollingIntervalMs: FAST_POLLING_INTERVAL_MS,
+  });
+
+  const unwatchers = GAME_EVENTS_TO_WATCH.map((eventName) =>
+    client.watchContractEvent({
+      address: RPS_CONTRACT_ADDRESS,
+      abi: RPS_ABI,
+      eventName,
+      args: { gameId },
+      onLogs(logs) {
+        for (const log of logs) {
+          onEvent({
+            eventName,
+            transactionHash: log.transactionHash ?? null,
+          });
+        }
+      },
+      onError(error) {
+        devLog("contract:watchGameEvents:error", {
+          gameId,
+          eventName,
+          error,
+        });
+      },
+    })
+  );
+
+  return () => {
+    for (const unwatch of unwatchers) {
+      unwatch();
+    }
+
+    devLog("contract:watchGameEvents:stop", { gameId });
+  };
 }
 
 export async function assertCorrectChain(): Promise<void> {

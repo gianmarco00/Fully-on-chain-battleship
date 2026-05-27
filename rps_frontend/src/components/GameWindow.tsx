@@ -13,6 +13,7 @@ import { revealMoveForGame } from "../utils/revealMove";
 import type { MoveInput } from "../utils/commit";
 import { devLog } from "../utils/devLog";
 import { getCurrentAccounts } from "../utils/wallet";
+import { watchGameEvents } from "../utils/contract";
 
 type GameWindowProps = {
   gameId: bigint;
@@ -179,9 +180,15 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
   useEffect(() => {
     let alive = true;
     let requestInFlight = false;
+    let queuedRefreshReason: "poll" | "focus" | "event" | null = null;
 
-    async function loadWindowState(reason: "initial" | "poll" | "focus") {
-      if (requestInFlight) return;
+    async function loadWindowState(
+      reason: "initial" | "poll" | "focus" | "event"
+    ) {
+      if (requestInFlight) {
+        queuedRefreshReason = reason === "initial" ? "poll" : reason;
+        return;
+      }
 
       requestInFlight = true;
 
@@ -223,6 +230,12 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
         devLog("gameWindow:load:error", { gameId, playerAddress, reason, error });
       } finally {
         requestInFlight = false;
+
+        if (alive && queuedRefreshReason) {
+          const nextReason = queuedRefreshReason;
+          queuedRefreshReason = null;
+          loadWindowState(nextReason);
+        }
       }
     }
 
@@ -246,11 +259,25 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
     window.addEventListener("focus", refreshOnFocus);
     document.addEventListener("visibilitychange", refreshWhenVisible);
 
+    const stopWatchingEvents = watchGameEvents(
+      gameId,
+      ({ eventName, transactionHash }) => {
+        devLog("gameWindow:event:received", {
+          gameId,
+          windowPlayerAddress: playerAddress,
+          eventName,
+          transactionHash,
+        });
+        loadWindowState("event");
+      }
+    );
+
     return () => {
       alive = false;
       window.clearInterval(intervalId);
       window.removeEventListener("focus", refreshOnFocus);
       document.removeEventListener("visibilitychange", refreshWhenVisible);
+      stopWatchingEvents();
     };
   }, [gameId, playerAddress]);
 
