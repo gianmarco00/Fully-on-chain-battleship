@@ -1,0 +1,46 @@
+{
+  "hash": "754e5280",
+  "configHash": "cc1eb514",
+  "lockfileHash": "2a236dd3",
+  "browserHash": "de517a81",
+  "optimized": {
+    "react-dom/client": {
+      "src": "../../node_modules/react-dom/client.js",
+      "file": "react-dom_client.js",
+      "fileHash": "6d874d43",
+      "needsInterop": true
+    },
+    "react": {
+      "src": "../../node_modules/react/index.js",
+      "file": "react.js",
+      "fileHash": "748a84bb",
+      "needsInterop": true
+    },
+    "react/jsx-dev-runtime": {
+      "src": "../../node_modules/react/jsx-dev-runtime.js",
+      "file": "react_jsx-dev-runtime.js",
+      "fileHash": "eb802921",
+      "needsInterop": true
+    },
+    "viem": {
+      "src": "../../node_modules/viem/_esm/index.js",
+      "file": "viem.js",
+      "fileHash": "20a7c543",
+      "needsInterop": false
+    }
+  },
+  "chunks": {
+    "native-DCJWOcFq": {
+      "file": "native-DCJWOcFq.js",
+      "isDynamicEntry": true
+    },
+    "react-Cvh7Ylf6": {
+      "file": "react-Cvh7Ylf6.js",
+      "isDynamicEntry": false
+    },
+    "utils-CC_BkgD7": {
+      "file": "utils-CC_BkgD7.js",
+      "isDynamicEntry": false
+    }
+  }
+}
