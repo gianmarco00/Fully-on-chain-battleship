@@ -159,6 +159,7 @@ export async function createGame(senderAddress: string): Promise<Hash> {
       abi: RPS_ABI,
       functionName: "createGame",
       account: asAddress(senderAddress),
+      gas: DEFAULT_WRITE_GAS_LIMIT,
     });
 
     devLog("contract:createGame:txSent", { senderAddress, hash });
@@ -183,6 +184,7 @@ export async function joinGame(
       functionName: "joinGame",
       args: [gameId],
       account: asAddress(senderAddress),
+      gas: DEFAULT_WRITE_GAS_LIMIT,
     });
 
     devLog("contract:joinGame:txSent", { gameId, senderAddress, hash });
