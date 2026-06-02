@@ -260,11 +260,37 @@ h3 {
   background: #ffffff;
 }
 
+.board-cell-selected,
+.board-cell-selected:nth-child(odd) {
+  color: #ffffff;
+  border-color: #0f172a;
+  background: #1f2937;
+}
+
 .board-cell:hover,
 .board-cell:focus-visible {
   outline: 3px solid #2563eb;
   outline-offset: 1px;
   background: #bfdbfe;
+}
+
+.board-cell-selected:hover,
+.board-cell-selected:focus-visible {
+  background: #374151;
+}
+
+.board-cell:disabled {
+  cursor: wait;
+  opacity: 0.85;
+}
+
+.board-setup-status {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  width: min(100%, 420px);
+  margin: 14px auto 0;
+  padding: 0 4px;
 }
 
 @media (max-width: 620px) {

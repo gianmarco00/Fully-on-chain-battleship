@@ -1,6 +1,18 @@
 import { useEffect, useRef, useState } from "react";
 
-import { watchGameEvents } from "../utils/contract";
+import {
+  commitBoard,
+  readBoardRoots,
+  waitForTransaction,
+  watchGameEvents,
+} from "../utils/contract";
+import {
+  CELL_COUNT,
+  SHIP_COUNT,
+  buildBoardSecret,
+  cellLabel,
+  saveBoardSecret,
+} from "../utils/board";
 import { devLog } from "../utils/devLog";
 import {
   formatPlayer,
@@ -11,6 +23,7 @@ import {
   logGameStateSnapshot,
 } from "../utils/gameState";
 import type { BattleshipGameState } from "../utils/gameState";
+import { getCurrentAccounts } from "../utils/wallet";
 
 type GameWindowProps = {
   gameId: bigint;
@@ -28,8 +41,6 @@ type RefreshReason = "initial" | "poll" | "lobby-poll" | "focus" | "event";
 const POLL_MS = 1000;
 const LOBBY_POLL_MS = 300;
 const PHASE_WAITING = 0;
-const BOARD_SIZE = 5;
-const CELL_COUNT = BOARD_SIZE * BOARD_SIZE;
 const GAME_STARTING_DELAY_MS = 2000;
 const BOARD_CELLS = Array.from({ length: CELL_COUNT }, (_, cell) => cell);
 
@@ -37,11 +48,13 @@ function sameAddress(left: string | null, right: string): boolean {
   return Boolean(left && left.toLowerCase() === right.toLowerCase());
 }
 
-function cellLabel(cell: number): string {
-  const column = String.fromCharCode("A".charCodeAt(0) + (cell % BOARD_SIZE));
-  const row = Math.floor(cell / BOARD_SIZE) + 1;
-
-  return `${column}${row}`;
+function playerRole(
+  state: BattleshipGameState,
+  playerAddress: string | null
+): "player1" | "player2" | null {
+  if (sameAddress(playerAddress, state.player1)) return "player1";
+  if (sameAddress(playerAddress, state.player2)) return "player2";
+  return null;
 }
 
 function buildLobbyView(
@@ -87,6 +100,10 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
   const [boardSetupReadyGameId, setBoardSetupReadyGameId] = useState<string | null>(
     null
   );
+  const [selectedShipCells, setSelectedShipCells] = useState<number[]>([]);
+  const [committingBoard, setCommittingBoard] = useState(false);
+  const [boardCommitMessage, setBoardCommitMessage] = useState("");
+  const [boardCommitError, setBoardCommitError] = useState("");
   const lastStateKey = useRef<string | null>(null);
   const latestPhase = useRef<number | null>(null);
 
@@ -207,6 +224,13 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
   const gameStarting = gameState ? !isZeroAddress(gameState.player2) : false;
   const boardSetupVisible =
     gameStarting && boardSetupReadyGameId === gameId.toString();
+  const currentRole = gameState ? playerRole(gameState, playerAddress) : null;
+  const currentPlayerBoardCommitted =
+    currentRole === "player1"
+      ? Boolean(gameState?.player1BoardCommitted)
+      : currentRole === "player2"
+        ? Boolean(gameState?.player2BoardCommitted)
+        : false;
 
   useEffect(() => {
     if (!gameStarting) {
@@ -232,13 +256,163 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
     return () => window.clearTimeout(timeoutId);
   }, [gameId, gameStarting, playerAddress]);
 
+  async function commitSelectedBoard(shipCells: number[]) {
+    if (!gameState || !playerAddress) {
+      setBoardCommitError("Game or player is not ready yet.");
+      devLog("gameWindow:boardCommit:blocked", {
+        gameId,
+        windowPlayerAddress: playerAddress,
+        reason: "missing game state or player address",
+      });
+      return;
+    }
+
+    const role = playerRole(gameState, playerAddress);
+
+    if (!role) {
+      setBoardCommitError("This game window does not belong to a player.");
+      devLog("gameWindow:boardCommit:blocked", {
+        gameId,
+        windowPlayerAddress: playerAddress,
+        reason: "viewer cannot commit board",
+      });
+      return;
+    }
+
+    const alreadyCommitted =
+      role === "player1"
+        ? gameState.player1BoardCommitted
+        : gameState.player2BoardCommitted;
+
+    if (alreadyCommitted) {
+      setBoardCommitError("This player has already committed a board.");
+      devLog("gameWindow:boardCommit:blocked", {
+        gameId,
+        windowPlayerAddress: playerAddress,
+        role,
+        reason: "board already committed",
+      });
+      return;
+    }
+
+    const accounts = await getCurrentAccounts();
+    const activeAccount = accounts[0] ?? null;
+
+    if (!sameAddress(activeAccount, playerAddress)) {
+      setBoardCommitError("Switch MetaMask to this player before committing.");
+      devLog("gameWindow:boardCommit:blocked", {
+        gameId,
+        windowPlayerAddress: playerAddress,
+        activeAccount,
+        role,
+        reason: "active account does not match window player",
+      });
+      return;
+    }
+
+    const boardSecret = buildBoardSecret({
+      gameId,
+      playerAddress,
+      shipCells,
+    });
+
+    try {
+      setCommittingBoard(true);
+      setBoardCommitError("");
+      setBoardCommitMessage("Committing board root...");
+
+      saveBoardSecret(boardSecret);
+      devLog("gameWindow:boardCommit:prepared", {
+        gameId,
+        windowPlayerAddress: playerAddress,
+        role,
+        shipCells,
+        shipMask: boardSecret.shipMask,
+        boardRoot: boardSecret.root,
+      });
+
+      const txHash = await commitBoard(gameId, boardSecret.root, playerAddress);
+      setBoardCommitMessage("Board transaction sent. Waiting for confirmation...");
+      devLog("gameWindow:boardCommit:txSent", {
+        gameId,
+        windowPlayerAddress: playerAddress,
+        role,
+        txHash,
+        boardRoot: boardSecret.root,
+      });
+
+      await waitForTransaction(txHash);
+
+      const boardRoots = await readBoardRoots(gameId);
+      const committedRoot = String(role === "player1" ? boardRoots[0] : boardRoots[1]);
+      const matches = committedRoot.toLowerCase() === boardSecret.root.toLowerCase();
+
+      devLog("gameWindow:boardCommit:verified", {
+        gameId,
+        windowPlayerAddress: playerAddress,
+        role,
+        expectedRoot: boardSecret.root,
+        committedRoot,
+        matches,
+      });
+
+      if (!matches) {
+        throw new Error("Committed board root did not match local board root.");
+      }
+
+      const refreshedState = await loadGameState(gameId);
+      setGameState(refreshedState);
+      setBoardCommitMessage("Board committed successfully.");
+    } catch (error) {
+      setBoardCommitMessage("");
+      setBoardCommitError(
+        error instanceof Error ? error.message : "Board commit failed."
+      );
+      devLog("gameWindow:boardCommit:error", {
+        gameId,
+        windowPlayerAddress: playerAddress,
+        boardRoot: boardSecret.root,
+        error,
+      });
+    } finally {
+      setCommittingBoard(false);
+    }
+  }
+
   function handleBoardCellClick(cell: number) {
+    if (committingBoard || currentPlayerBoardCommitted) return;
+
     devLog("gameWindow:boardSetup:cellClick", {
       gameId,
       windowPlayerAddress: playerAddress,
       cell,
       label: cellLabel(cell),
     });
+
+    if (selectedShipCells.includes(cell)) {
+      const nextCells = selectedShipCells.filter((shipCell) => shipCell !== cell);
+      setSelectedShipCells(nextCells);
+      setBoardCommitMessage("");
+      setBoardCommitError("");
+      return;
+    }
+
+    if (selectedShipCells.length >= SHIP_COUNT) return;
+
+    const nextCells = [...selectedShipCells, cell];
+    setSelectedShipCells(nextCells);
+    setBoardCommitMessage("");
+    setBoardCommitError("");
+
+    if (nextCells.length === SHIP_COUNT) {
+      commitSelectedBoard(nextCells).catch((error) => {
+        devLog("gameWindow:boardCommit:unhandledError", {
+          gameId,
+          windowPlayerAddress: playerAddress,
+          error,
+        });
+      });
+    }
   }
 
   if (gameStarting && !boardSetupVisible) {
@@ -263,14 +437,32 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
               <button
                 key={cell}
                 type="button"
-                className="board-cell"
+                className={
+                  selectedShipCells.includes(cell)
+                    ? "board-cell board-cell-selected"
+                    : "board-cell"
+                }
                 onClick={() => handleBoardCellClick(cell)}
+                disabled={committingBoard || currentPlayerBoardCommitted}
                 aria-label={`Cell ${cellLabel(cell)}`}
               >
                 {cellLabel(cell)}
               </button>
             ))}
           </div>
+
+          <div className="board-setup-status">
+            <span className="label">Ships selected</span>
+            <strong>
+              {selectedShipCells.length} / {SHIP_COUNT}
+            </strong>
+          </div>
+
+          {currentPlayerBoardCommitted && (
+            <div className="success">Board already committed.</div>
+          )}
+          {boardCommitMessage && <div className="success">{boardCommitMessage}</div>}
+          {boardCommitError && <div className="warning">{boardCommitError}</div>}
         </section>
       </main>
     );

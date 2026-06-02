@@ -263,6 +263,65 @@ export async function joinGame(
   }
 }
 
+export async function commitBoard(
+  gameId: bigint,
+  boardRoot: Hash,
+  senderAddress: string
+): Promise<Hash> {
+  devLog("contract:commitBoard:start", {
+    gameId,
+    boardRoot,
+    senderAddress,
+    contract: BATTLESHIP_CONTRACT_ADDRESS,
+  });
+
+  try {
+    const provider = getEthereumProvider();
+    const data = encodeFunctionData({
+      abi: BATTLESHIP_ABI,
+      functionName: "commitBoard",
+      args: [gameId, boardRoot],
+    });
+
+    devLog("contract:commitBoard:sendTransaction:request", {
+      gameId,
+      boardRoot,
+      senderAddress,
+      contract: BATTLESHIP_CONTRACT_ADDRESS,
+      functionName: "commitBoard",
+      gas: DEFAULT_WRITE_GAS_LIMIT,
+    });
+
+    const hash = (await provider.request({
+      method: "eth_sendTransaction",
+      params: [
+        {
+          from: asAddress(senderAddress),
+          to: asAddress(BATTLESHIP_CONTRACT_ADDRESS),
+          data,
+          gas: numberToHex(DEFAULT_WRITE_GAS_LIMIT),
+        },
+      ],
+    })) as Hash;
+
+    devLog("contract:commitBoard:txSent", {
+      gameId,
+      boardRoot,
+      senderAddress,
+      hash,
+    });
+    return hash;
+  } catch (error) {
+    devLog("contract:commitBoard:error", {
+      gameId,
+      boardRoot,
+      senderAddress,
+      error,
+    });
+    throw error;
+  }
+}
+
 export function readCreatedGameIdFromReceipt(
   receipt: TransactionReceipt
 ): bigint | null {

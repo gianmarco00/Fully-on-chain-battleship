@@ -8,7 +8,7 @@ NODE_URL = "http://127.0.0.1:8549"
 EXPECTED_CHAIN_ID = 70207
 
 # Tiny test transfer. If recipient is yourself, only gas is really spent.
-AMOUNT_UZHETHS = Decimal("1")
+AMOUNT_UZHETHS = Decimal("2")
 
 
 def main():
