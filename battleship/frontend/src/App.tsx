@@ -98,12 +98,11 @@ function App() {
     }
   }
 
-  function handleGameCreated(gameId: bigint) {
-    devLog("app:gameCreated", { gameId });
-    setNextGameId((gameId + 1n).toString());
+  function handleGameUpdated(gameId: bigint) {
+    devLog("app:gameUpdated", { gameId });
 
     handleReadContract().catch(() => {
-      // The transaction succeeded; keep the create status even if refresh fails.
+      // The transaction succeeded; keep the action status even if refresh fails.
     });
   }
 
@@ -214,7 +213,7 @@ function App() {
           connected={connected}
           correctChain={correctChain}
           address={address}
-          onGameCreated={handleGameCreated}
+          onGameUpdated={handleGameUpdated}
         />
 
         {connected && !correctChain && (

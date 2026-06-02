@@ -3,6 +3,9 @@ import { useState } from "react";
 import {
   assertCorrectChain,
   createGame,
+  joinGame,
+  readCreatedGameIdFromReceipt,
+  readGame,
   readNextGameId,
   waitForTransaction,
 } from "../utils/contract";
@@ -12,7 +15,7 @@ type LobbyActionsProps = {
   connected: boolean;
   correctChain: boolean;
   address: string | null;
-  onGameCreated: (gameId: bigint) => void;
+  onGameUpdated: (gameId: bigint) => void;
 };
 
 type StatusType = "idle" | "info" | "success" | "error";
@@ -27,14 +30,20 @@ function parseGameId(input: string): bigint {
   return BigInt(trimmed);
 }
 
+function isZeroAddress(address: string): boolean {
+  return address.toLowerCase() === "0x0000000000000000000000000000000000000000";
+}
+
 export function LobbyActions({
   connected,
   correctChain,
   address,
-  onGameCreated,
+  onGameUpdated,
 }: LobbyActionsProps) {
   const [joinGameIdInput, setJoinGameIdInput] = useState("");
-  const [loadingAction, setLoadingAction] = useState<"create" | null>(null);
+  const [loadingAction, setLoadingAction] = useState<"create" | "join" | null>(
+    null
+  );
   const [statusType, setStatusType] = useState<StatusType>("idle");
   const [statusMessage, setStatusMessage] = useState("");
   const [txHash, setTxHash] = useState<string | null>(null);
@@ -62,13 +71,9 @@ export function LobbyActions({
 
       await assertCorrectChain();
 
-      const gameIdBefore = await readNextGameId();
-      devLog("lobby:createGame:nextGameIdBefore", { gameIdBefore });
-
-      setStatusMessage("Waiting for MetaMask transaction prompt...");
+      setStatusMessage("Opening MetaMask transaction request...");
       devLog("lobby:createGame:walletPrompt:requesting", {
         address,
-        gameIdBefore,
       });
 
       walletPromptTimers = [
@@ -83,7 +88,7 @@ export function LobbyActions({
           devLog("lobby:createGame:walletPrompt:stillWaiting", {
             seconds: 15,
             address,
-            hint: "The app is still waiting for walletClient.writeContract to return a tx hash.",
+            hint: "The app is still waiting for eth_sendTransaction to return a tx hash.",
           });
         }, 15_000),
       ];
@@ -104,26 +109,26 @@ export function LobbyActions({
         });
       }, 15_000);
 
-      await waitForTransaction(hash);
+      const receipt = await waitForTransaction(hash);
       if (receiptTimer !== null) {
         window.clearTimeout(receiptTimer);
         receiptTimer = null;
       }
 
+      const gameIdFromReceipt = readCreatedGameIdFromReceipt(receipt);
       const gameIdAfter = await readNextGameId();
-      const createdGameId =
-        gameIdAfter > gameIdBefore ? gameIdAfter - 1n : gameIdBefore;
+      const createdGameId = gameIdFromReceipt ?? gameIdAfter - 1n;
 
       devLog("lobby:createGame:confirmed", {
         hash,
-        gameIdBefore,
+        gameIdFromReceipt,
         gameIdAfter,
         createdGameId,
       });
 
       setStatusType("success");
       setStatusMessage(`Game created successfully. gameId = ${createdGameId}`);
-      onGameCreated(createdGameId);
+      onGameUpdated(createdGameId);
     } catch (error) {
       devLog("lobby:createGame:error", { error });
       setStatusType("error");
@@ -137,28 +142,120 @@ export function LobbyActions({
     }
   }
 
-  function handleJoinGame() {
-    devLog("lobby:joinGame:click", { actionsReady, joinGameIdInput });
+  async function handleJoinGame() {
+    devLog("lobby:joinGame:click", { actionsReady, address, joinGameIdInput });
 
-    if (!actionsReady) {
+    if (!address) {
       setStatusType("error");
-      setStatusMessage("Connect MetaMask on UZHETH PoS before joining a game.");
+      setStatusMessage("Connect MetaMask before joining a game.");
+      devLog("lobby:joinGame:blocked", { reason: "missing wallet" });
       return;
     }
 
-    try {
-      const gameId = parseGameId(joinGameIdInput);
+    let walletPromptTimers: number[] = [];
+    let receiptTimer: number | null = null;
 
+    try {
+      setLoadingAction("join");
       setStatusType("info");
-      setStatusMessage(
-        `Join transaction flow for game ${gameId.toString()} is staged for the next milestone.`
-      );
+      setStatusMessage("Checking game before joining...");
+      setTxHash(null);
+
+      await assertCorrectChain();
+
+      const gameId = parseGameId(joinGameIdInput);
+      devLog("lobby:joinGame:parsedGameId", { gameId });
+
+      const game = await readGame(gameId);
+      const player1 = String(game[0]).toLowerCase();
+      const player2 = String(game[1]).toLowerCase();
+      const phase = Number(game[3]);
+      const sender = address.toLowerCase();
+
+      devLog("lobby:joinGame:precheck", {
+        gameId,
+        player1,
+        player2,
+        phase,
+        sender,
+      });
+
+      if (sender === player1) {
+        throw new Error(
+          "This wallet created the game and cannot join it as player2. Switch MetaMask account."
+        );
+      }
+
+      if (!isZeroAddress(player2)) {
+        throw new Error("This game already has player2 and cannot be joined.");
+      }
+
+      if (phase !== 0) {
+        throw new Error("This game is not in WaitingForPlayer phase anymore.");
+      }
+
+      setStatusMessage("Opening MetaMask join request...");
+      devLog("lobby:joinGame:walletPrompt:requesting", {
+        address,
+        gameId,
+      });
+
+      walletPromptTimers = [
+        window.setTimeout(() => {
+          devLog("lobby:joinGame:walletPrompt:stillWaiting", {
+            seconds: 5,
+            address,
+            gameId,
+            hint: "If no popup is visible, check whether MetaMask is locked or opened behind the browser.",
+          });
+        }, 5_000),
+        window.setTimeout(() => {
+          devLog("lobby:joinGame:walletPrompt:stillWaiting", {
+            seconds: 15,
+            address,
+            gameId,
+            hint: "The app is still waiting for eth_sendTransaction to return a tx hash.",
+          });
+        }, 15_000),
+      ];
+
+      const hash = await joinGame(gameId, address);
+      for (const timer of walletPromptTimers) window.clearTimeout(timer);
+      walletPromptTimers = [];
+
+      setTxHash(hash);
+      setStatusType("info");
+      setStatusMessage("Join transaction sent. Waiting for confirmation...");
+      devLog("lobby:joinGame:txSent", { gameId, hash, address });
+
+      receiptTimer = window.setTimeout(() => {
+        devLog("lobby:joinGame:receipt:stillWaiting", {
+          seconds: 15,
+          gameId,
+          hash,
+        });
+      }, 15_000);
+
+      await waitForTransaction(hash);
+      if (receiptTimer !== null) {
+        window.clearTimeout(receiptTimer);
+        receiptTimer = null;
+      }
+
+      devLog("lobby:joinGame:confirmed", { gameId, hash });
+      setStatusType("success");
+      setStatusMessage(`Joined game ${gameId} successfully.`);
+      onGameUpdated(gameId);
     } catch (error) {
       setStatusType("error");
       setStatusMessage(
-        error instanceof Error ? error.message : "Invalid game ID."
+        error instanceof Error ? error.message : "Failed to join game."
       );
       devLog("lobby:joinGame:error", { error });
+    } finally {
+      for (const timer of walletPromptTimers) window.clearTimeout(timer);
+      if (receiptTimer !== null) window.clearTimeout(receiptTimer);
+      setLoadingAction(null);
     }
   }
 
@@ -186,7 +283,7 @@ export function LobbyActions({
           onClick={handleJoinGame}
           disabled={!actionsReady || loadingAction !== null}
         >
-          Join Game
+          {loadingAction === "join" ? "Joining..." : "Join Game"}
         </button>
       </div>
 

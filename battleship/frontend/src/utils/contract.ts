@@ -1,4 +1,10 @@
-import { createPublicClient, createWalletClient, custom, http } from "viem";
+import {
+  createPublicClient,
+  decodeEventLog,
+  encodeFunctionData,
+  http,
+  numberToHex,
+} from "viem";
 import type { Address, Hash, TransactionReceipt } from "viem";
 
 import {
@@ -29,15 +35,6 @@ export function createBattleshipPublicClient() {
     chain: UZHETH_CHAIN,
     transport: http(UZHETH_RPC_URL),
     pollingInterval: FAST_POLLING_INTERVAL_MS,
-  });
-}
-
-function createBattleshipWalletClient() {
-  devLog("contract:walletClient:create:start");
-
-  return createWalletClient({
-    chain: UZHETH_CHAIN,
-    transport: custom(getEthereumProvider()),
   });
 }
 
@@ -90,6 +87,26 @@ export async function readContractCodeBytes(): Promise<number> {
   }
 }
 
+export async function readGame(gameId: bigint): Promise<readonly unknown[]> {
+  devLog("contract:getGame:start", { gameId });
+  const client = createBattleshipPublicClient();
+
+  try {
+    const game = (await client.readContract({
+      address: asAddress(BATTLESHIP_CONTRACT_ADDRESS),
+      abi: BATTLESHIP_ABI,
+      functionName: "getGame",
+      args: [gameId],
+    })) as readonly unknown[];
+
+    devLog("contract:getGame:success", { gameId, game });
+    return game;
+  } catch (error) {
+    devLog("contract:getGame:error", { gameId, error });
+    throw error;
+  }
+}
+
 export async function createGame(senderAddress: string): Promise<Hash> {
   devLog("contract:createGame:start", {
     senderAddress,
@@ -98,33 +115,29 @@ export async function createGame(senderAddress: string): Promise<Hash> {
 
   try {
     const provider = getEthereumProvider();
-    const [chainId, accounts] = await Promise.all([
-      provider.request({ method: "eth_chainId" }),
-      provider.request({ method: "eth_accounts" }),
-    ]);
-
-    devLog("contract:createGame:providerSnapshot", {
-      expectedChainId: UZHETH_CHAIN_ID_HEX,
-      actualChainId: chainId,
-      accounts,
-      senderAddress,
+    const data = encodeFunctionData({
+      abi: BATTLESHIP_ABI,
+      functionName: "createGame",
     });
 
-    const walletClient = createBattleshipWalletClient();
-    devLog("contract:createGame:writeContract:request", {
+    devLog("contract:createGame:sendTransaction:request", {
       senderAddress,
       contract: BATTLESHIP_CONTRACT_ADDRESS,
       functionName: "createGame",
       gas: DEFAULT_WRITE_GAS_LIMIT,
     });
 
-    const hash = await walletClient.writeContract({
-      address: asAddress(BATTLESHIP_CONTRACT_ADDRESS),
-      abi: BATTLESHIP_ABI,
-      functionName: "createGame",
-      account: asAddress(senderAddress),
-      gas: DEFAULT_WRITE_GAS_LIMIT,
-    });
+    const hash = (await provider.request({
+      method: "eth_sendTransaction",
+      params: [
+        {
+          from: asAddress(senderAddress),
+          to: asAddress(BATTLESHIP_CONTRACT_ADDRESS),
+          data,
+          gas: numberToHex(DEFAULT_WRITE_GAS_LIMIT),
+        },
+      ],
+    })) as Hash;
 
     devLog("contract:createGame:txSent", { senderAddress, hash });
     return hash;
@@ -132,6 +145,100 @@ export async function createGame(senderAddress: string): Promise<Hash> {
     devLog("contract:createGame:error", { senderAddress, error });
     throw error;
   }
+}
+
+export async function joinGame(
+  gameId: bigint,
+  senderAddress: string
+): Promise<Hash> {
+  devLog("contract:joinGame:start", {
+    gameId,
+    senderAddress,
+    contract: BATTLESHIP_CONTRACT_ADDRESS,
+  });
+
+  try {
+    const provider = getEthereumProvider();
+    const data = encodeFunctionData({
+      abi: BATTLESHIP_ABI,
+      functionName: "joinGame",
+      args: [gameId],
+    });
+
+    devLog("contract:joinGame:sendTransaction:request", {
+      gameId,
+      senderAddress,
+      contract: BATTLESHIP_CONTRACT_ADDRESS,
+      functionName: "joinGame",
+      gas: DEFAULT_WRITE_GAS_LIMIT,
+    });
+
+    const hash = (await provider.request({
+      method: "eth_sendTransaction",
+      params: [
+        {
+          from: asAddress(senderAddress),
+          to: asAddress(BATTLESHIP_CONTRACT_ADDRESS),
+          data,
+          gas: numberToHex(DEFAULT_WRITE_GAS_LIMIT),
+        },
+      ],
+    })) as Hash;
+
+    devLog("contract:joinGame:txSent", { gameId, senderAddress, hash });
+    return hash;
+  } catch (error) {
+    devLog("contract:joinGame:error", { gameId, senderAddress, error });
+    throw error;
+  }
+}
+
+export function readCreatedGameIdFromReceipt(
+  receipt: TransactionReceipt
+): bigint | null {
+  devLog("contract:createGame:decodeReceipt:start", {
+    txHash: receipt.transactionHash,
+    logs: receipt.logs.length,
+  });
+
+  for (const log of receipt.logs) {
+    if (log.address.toLowerCase() !== BATTLESHIP_CONTRACT_ADDRESS.toLowerCase()) {
+      continue;
+    }
+
+    try {
+      const event = decodeEventLog({
+        abi: BATTLESHIP_ABI,
+        data: log.data,
+        topics: log.topics,
+      });
+
+      if (event.eventName !== "GameCreated") continue;
+
+      const args = event.args as unknown as Record<string, unknown>;
+      const gameId = args.gameId;
+
+      if (typeof gameId !== "bigint") {
+        throw new Error("GameCreated event did not include a bigint gameId.");
+      }
+
+      devLog("contract:createGame:decodeReceipt:success", {
+        txHash: receipt.transactionHash,
+        gameId,
+      });
+      return gameId;
+    } catch (error) {
+      devLog("contract:createGame:decodeReceipt:skipLog", {
+        txHash: receipt.transactionHash,
+        error,
+      });
+    }
+  }
+
+  devLog("contract:createGame:decodeReceipt:notFound", {
+    txHash: receipt.transactionHash,
+  });
+  return null;
 }
 
 export async function waitForTransaction(
