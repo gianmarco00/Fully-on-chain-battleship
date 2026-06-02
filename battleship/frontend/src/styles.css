@@ -208,11 +208,50 @@ h3 {
   width: min(560px, 100%);
 }
 
+.deadline-timer {
+  width: 100%;
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin: 0 0 20px;
+  border: 1px solid #bfdbfe;
+  border-radius: 12px;
+  padding: 10px 12px;
+  color: #1e3a8a;
+  background: #eff6ff;
+}
+
+.deadline-timer span {
+  color: #64748b;
+  font-size: 13px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.deadline-timer strong {
+  min-width: 92px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.deadline-timer-expired {
+  color: #92400e;
+  border-color: #fde68a;
+  background: #fffbeb;
+}
+
 .game-starting-card {
   min-height: 260px;
   display: grid;
-  place-items: center;
+  grid-template-rows: auto 1fr;
+  justify-items: center;
   text-align: center;
+}
+
+.game-starting-card h1 {
+  align-self: center;
 }
 
 .lobby-messages {

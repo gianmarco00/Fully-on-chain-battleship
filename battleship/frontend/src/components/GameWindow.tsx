@@ -62,6 +62,7 @@ const PHASE_AUDIT = 4;
 const PHASE_FINISHED = 5;
 const GAME_STARTING_DELAY_MS = 2000;
 const BOARD_CELLS = Array.from({ length: CELL_COUNT }, (_, cell) => cell);
+const TIMER_TICK_MS = 1000;
 
 function sameAddress(left: string | null, right: string): boolean {
   return Boolean(left && left.toLowerCase() === right.toLowerCase());
@@ -109,6 +110,34 @@ function buildLobbyView(
   };
 }
 
+function formatCountdown(seconds: number): string {
+  const safeSeconds = Math.max(seconds, 0);
+  const minutes = Math.floor(safeSeconds / 60);
+  const remainingSeconds = safeSeconds % 60;
+
+  return `${minutes}:${remainingSeconds.toString().padStart(2, "0")}`;
+}
+
+function DeadlineTimer({
+  gameState,
+  nowMs,
+}: {
+  gameState: BattleshipGameState | null;
+  nowMs: number;
+}) {
+  if (!gameState || gameState.actionDeadline === 0n) return null;
+
+  const secondsLeft = Number(gameState.actionDeadline) - Math.floor(nowMs / 1000);
+  const expired = secondsLeft <= 0;
+
+  return (
+    <div className={expired ? "deadline-timer deadline-timer-expired" : "deadline-timer"}>
+      <span>{gameState.phaseName}</span>
+      <strong>{expired ? "Deadline passed" : formatCountdown(secondsLeft)}</strong>
+    </div>
+  );
+}
+
 export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
   const [gameState, setGameState] = useState<BattleshipGameState | null>(null);
   const [lobbyView, setLobbyView] = useState<LobbyView>({
@@ -137,11 +166,20 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
   const [shotResults, setShotResults] = useState<ShotResult[]>(() =>
     loadShotResults(gameId)
   );
+  const [nowMs, setNowMs] = useState(() => Date.now());
   const lastStateKey = useRef<string | null>(null);
   const latestPhase = useRef<number | null>(null);
   const autoSetupTimeoutClaimKeys = useRef<Set<string>>(new Set());
   const autoRevealKeys = useRef<Set<string>>(new Set());
   const autoAuditKeys = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    const intervalId = window.setInterval(() => {
+      setNowMs(Date.now());
+    }, TIMER_TICK_MS);
+
+    return () => window.clearInterval(intervalId);
+  }, []);
 
   useEffect(() => {
     let alive = true;
@@ -991,6 +1029,7 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
     return (
       <main className="page game-window-page">
         <section className="card game-window-card game-starting-card">
+          <DeadlineTimer gameState={gameState} nowMs={nowMs} />
           <h1>Game Starting...</h1>
         </section>
       </main>
@@ -1001,6 +1040,7 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
     return (
       <main className="page game-window-page">
         <section className="card game-window-card game-result-card">
+          <DeadlineTimer gameState={gameState} nowMs={nowMs} />
           <h1>{currentPlayerWon ? "You win" : "You loose"}</h1>
         </section>
       </main>
@@ -1011,6 +1051,7 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
     return (
       <main className="page game-window-page">
         <section className="card game-window-card combat-window-card">
+          <DeadlineTimer gameState={gameState} nowMs={nowMs} />
           <h1>
             {currentPlayerIsProvisionalWinner ? "Auditing board" : "Waiting for audit"}
           </h1>
@@ -1052,6 +1093,7 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
       return (
         <main className="page game-window-page">
           <section className="card game-window-card combat-window-card">
+            <DeadlineTimer gameState={gameState} nowMs={nowMs} />
             <h1>Attack</h1>
 
             <div className="fleet-board attack-board" aria-label="Enemy board">
@@ -1090,6 +1132,7 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
     return (
       <main className="page game-window-page">
         <section className="card game-window-card combat-window-card">
+          <DeadlineTimer gameState={gameState} nowMs={nowMs} />
           <h1>Waiting to be attacked</h1>
 
           <div className="fleet-board own-board" aria-label="Your board">
@@ -1127,6 +1170,7 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
     return (
       <main className="page game-window-page">
         <section className="card game-window-card">
+          <DeadlineTimer gameState={gameState} nowMs={nowMs} />
           <p className="eyebrow">Game {gameId.toString()}</p>
           <h1>Position your fleet</h1>
 
@@ -1173,6 +1217,7 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
   return (
     <main className="page game-window-page">
       <section className="card game-window-card">
+        <DeadlineTimer gameState={gameState} nowMs={nowMs} />
         <p className="eyebrow">Game {gameId.toString()}</p>
         <h1>{lobbyView.title}</h1>
 
