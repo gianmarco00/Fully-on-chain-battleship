@@ -107,6 +107,48 @@ export async function readGame(gameId: bigint): Promise<readonly unknown[]> {
   }
 }
 
+export async function readBoardRoots(
+  gameId: bigint
+): Promise<readonly unknown[]> {
+  devLog("contract:getBoardRoots:start", { gameId });
+  const client = createBattleshipPublicClient();
+
+  try {
+    const boardRoots = (await client.readContract({
+      address: asAddress(BATTLESHIP_CONTRACT_ADDRESS),
+      abi: BATTLESHIP_ABI,
+      functionName: "getBoardRoots",
+      args: [gameId],
+    })) as readonly unknown[];
+
+    devLog("contract:getBoardRoots:success", { gameId, boardRoots });
+    return boardRoots;
+  } catch (error) {
+    devLog("contract:getBoardRoots:error", { gameId, error });
+    throw error;
+  }
+}
+
+export async function readHitMasks(gameId: bigint): Promise<readonly unknown[]> {
+  devLog("contract:getHitMasks:start", { gameId });
+  const client = createBattleshipPublicClient();
+
+  try {
+    const hitMasks = (await client.readContract({
+      address: asAddress(BATTLESHIP_CONTRACT_ADDRESS),
+      abi: BATTLESHIP_ABI,
+      functionName: "getHitMasks",
+      args: [gameId],
+    })) as readonly unknown[];
+
+    devLog("contract:getHitMasks:success", { gameId, hitMasks });
+    return hitMasks;
+  } catch (error) {
+    devLog("contract:getHitMasks:error", { gameId, error });
+    throw error;
+  }
+}
+
 export async function createGame(senderAddress: string): Promise<Hash> {
   devLog("contract:createGame:start", {
     senderAddress,

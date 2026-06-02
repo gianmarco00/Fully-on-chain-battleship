@@ -1,5 +1,6 @@
 import { useState } from "react";
 
+import { GameStatePanel } from "./GameStatePanel";
 import {
   assertCorrectChain,
   createGame,
@@ -10,6 +11,8 @@ import {
   waitForTransaction,
 } from "../utils/contract";
 import { devLog } from "../utils/devLog";
+import { loadGameState } from "../utils/gameState";
+import type { BattleshipGameState } from "../utils/gameState";
 
 type LobbyActionsProps = {
   connected: boolean;
@@ -41,12 +44,13 @@ export function LobbyActions({
   onGameUpdated,
 }: LobbyActionsProps) {
   const [joinGameIdInput, setJoinGameIdInput] = useState("");
-  const [loadingAction, setLoadingAction] = useState<"create" | "join" | null>(
-    null
-  );
+  const [loadingAction, setLoadingAction] = useState<
+    "create" | "join" | "read" | null
+  >(null);
   const [statusType, setStatusType] = useState<StatusType>("idle");
   const [statusMessage, setStatusMessage] = useState("");
   const [txHash, setTxHash] = useState<string | null>(null);
+  const [gameState, setGameState] = useState<BattleshipGameState | null>(null);
 
   const actionsReady = connected && correctChain;
 
@@ -259,6 +263,47 @@ export function LobbyActions({
     }
   }
 
+  async function handleReadGameState() {
+    devLog("lobby:readGameState:click", { actionsReady, joinGameIdInput });
+
+    if (!actionsReady) {
+      setStatusType("error");
+      setStatusMessage("Connect MetaMask on UZHETH PoS before reading a game.");
+      return;
+    }
+
+    try {
+      setLoadingAction("read");
+      setStatusType("info");
+      setStatusMessage("Reading game state...");
+      setTxHash(null);
+
+      await assertCorrectChain();
+
+      const gameId = parseGameId(joinGameIdInput);
+      const loadedGameState = await loadGameState(gameId);
+
+      setGameState(loadedGameState);
+      setStatusType("success");
+      setStatusMessage(`Loaded game ${gameId}.`);
+      devLog("lobby:readGameState:success", {
+        gameId,
+        phase: loadedGameState.phaseName,
+        player1: loadedGameState.player1,
+        player2: loadedGameState.player2,
+      });
+    } catch (error) {
+      setGameState(null);
+      setStatusType("error");
+      setStatusMessage(
+        error instanceof Error ? error.message : "Failed to read game state."
+      );
+      devLog("lobby:readGameState:error", { error });
+    } finally {
+      setLoadingAction(null);
+    }
+  }
+
   return (
     <section className="panel-block">
       <h2>Lobby</h2>
@@ -285,6 +330,12 @@ export function LobbyActions({
         >
           {loadingAction === "join" ? "Joining..." : "Join Game"}
         </button>
+        <button
+          onClick={handleReadGameState}
+          disabled={!actionsReady || loadingAction !== null}
+        >
+          {loadingAction === "read" ? "Reading..." : "Read State"}
+        </button>
       </div>
 
       {!connected && (
@@ -307,6 +358,8 @@ export function LobbyActions({
           <strong>{txHash}</strong>
         </div>
       )}
+
+      <GameStatePanel gameState={gameState} />
     </section>
   );
 }
