@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 
 import {
   attackCell,
+  claimTimeout,
   commitBoard,
   readBoardRoots,
   readCellRevealedLogsFromReceipt,
@@ -122,6 +123,8 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
   const [committingBoard, setCommittingBoard] = useState(false);
   const [boardCommitMessage, setBoardCommitMessage] = useState("");
   const [boardCommitError, setBoardCommitError] = useState("");
+  const [setupTimeoutMessage, setSetupTimeoutMessage] = useState("");
+  const [setupTimeoutError, setSetupTimeoutError] = useState("");
   const [savedShipCells, setSavedShipCells] = useState<number[]>(() =>
     playerAddress ? (loadBoardSecret(gameId, playerAddress)?.shipCells ?? []) : []
   );
@@ -136,6 +139,7 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
   );
   const lastStateKey = useRef<string | null>(null);
   const latestPhase = useRef<number | null>(null);
+  const autoSetupTimeoutClaimKeys = useRef<Set<string>>(new Set());
   const autoRevealKeys = useRef<Set<string>>(new Set());
   const autoAuditKeys = useRef<Set<string>>(new Set());
 
@@ -277,6 +281,12 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
       : currentRole === "player2"
         ? Boolean(gameState?.player2BoardCommitted)
         : false;
+  const opponentBoardCommitted =
+    currentRole === "player1"
+      ? Boolean(gameState?.player2BoardCommitted)
+      : currentRole === "player2"
+        ? Boolean(gameState?.player1BoardCommitted)
+        : false;
   const attackPhaseVisible = gameState?.phase === PHASE_ATTACK;
   const cellRevealPhaseVisible = gameState?.phase === PHASE_CELL_REVEAL;
   const auditPhaseVisible = gameState?.phase === PHASE_AUDIT;
@@ -322,6 +332,118 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
 
     return () => window.clearTimeout(timeoutId);
   }, [gameId, gameStarting, playerAddress]);
+
+  useEffect(() => {
+    if (
+      !gameState ||
+      !playerAddress ||
+      !currentRole ||
+      gameState.phase !== PHASE_BOARD_SETUP ||
+      !currentPlayerBoardCommitted ||
+      opponentBoardCommitted ||
+      gameState.actionDeadline === 0n
+    ) {
+      return;
+    }
+
+    const claimantAddress = playerAddress;
+    const actionDeadline = gameState.actionDeadline;
+    const claimKey = [
+      gameId.toString(),
+      claimantAddress.toLowerCase(),
+      currentRole,
+      actionDeadline.toString(),
+    ].join(":");
+    const delayMs = Math.max(Number(actionDeadline) * 1000 - Date.now() + 1000, 0);
+
+    devLog("gameWindow:setupTimeout:scheduled", {
+      gameId,
+      windowPlayerAddress: claimantAddress,
+      actionDeadline,
+      delayMs,
+    });
+
+    const timeoutId = window.setTimeout(() => {
+      if (autoSetupTimeoutClaimKeys.current.has(claimKey)) return;
+      autoSetupTimeoutClaimKeys.current.add(claimKey);
+
+      async function claimBoardSetupTimeout() {
+        devLog("gameWindow:setupTimeout:start", {
+          gameId,
+          windowPlayerAddress: claimantAddress,
+          role: currentRole,
+        });
+
+        try {
+          const accounts = await getCurrentAccounts();
+          const activeAccount = accounts[0] ?? null;
+
+          if (!sameAddress(activeAccount, claimantAddress)) {
+            throw new Error("Switch MetaMask to this player to claim timeout.");
+          }
+
+          setSetupTimeoutMessage("Claiming board setup timeout...");
+          setSetupTimeoutError("");
+
+          const txHash = await claimTimeout(gameId, claimantAddress);
+
+          setSetupTimeoutMessage(
+            "Timeout claim transaction sent. Waiting for confirmation..."
+          );
+          devLog("gameWindow:setupTimeout:txSent", {
+            gameId,
+            windowPlayerAddress: claimantAddress,
+            txHash,
+          });
+
+          await waitForTransaction(txHash);
+          const refreshedState = await loadGameState(gameId);
+          setGameState(refreshedState);
+
+          const claimedWin =
+            refreshedState.phase === PHASE_FINISHED &&
+            sameAddress(claimantAddress, refreshedState.winner);
+
+          devLog("gameWindow:setupTimeout:registered", {
+            gameId,
+            windowPlayerAddress: claimantAddress,
+            txHash,
+            claimedWin,
+            phase: refreshedState.phaseName,
+            winner: refreshedState.winner,
+          });
+
+          if (!claimedWin) {
+            throw new Error("Timeout claim confirmed, but winner did not match.");
+          }
+
+          setSetupTimeoutMessage("");
+        } catch (error) {
+          setSetupTimeoutMessage("");
+          setSetupTimeoutError(
+            error instanceof Error ? error.message : "Timeout claim failed."
+          );
+          devLog("gameWindow:setupTimeout:error", {
+            gameId,
+            windowPlayerAddress: claimantAddress,
+            role: currentRole,
+            error,
+          });
+        }
+      }
+
+      claimBoardSetupTimeout();
+    }, delayMs);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [
+    currentPlayerBoardCommitted,
+    currentRole,
+    gameId,
+    gameState,
+    opponentBoardCommitted,
+    playerAddress,
+  ]);
 
   useEffect(() => {
     if (
@@ -1039,6 +1161,10 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
           )}
           {boardCommitMessage && <div className="success">{boardCommitMessage}</div>}
           {boardCommitError && <div className="warning">{boardCommitError}</div>}
+          {setupTimeoutMessage && (
+            <div className="success">{setupTimeoutMessage}</div>
+          )}
+          {setupTimeoutError && <div className="warning">{setupTimeoutError}</div>}
         </section>
       </main>
     );

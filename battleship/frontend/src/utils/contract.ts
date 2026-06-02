@@ -551,6 +551,60 @@ export async function revealFinalBoard(
   }
 }
 
+export async function claimTimeout(
+  gameId: bigint,
+  senderAddress: string
+): Promise<Hash> {
+  devLog("contract:claimTimeout:start", {
+    gameId,
+    senderAddress,
+    contract: BATTLESHIP_CONTRACT_ADDRESS,
+  });
+
+  try {
+    const provider = getEthereumProvider();
+    const data = encodeFunctionData({
+      abi: BATTLESHIP_ABI,
+      functionName: "claimTimeout",
+      args: [gameId],
+    });
+
+    devLog("contract:claimTimeout:sendTransaction:request", {
+      gameId,
+      senderAddress,
+      contract: BATTLESHIP_CONTRACT_ADDRESS,
+      functionName: "claimTimeout",
+      gas: DEFAULT_WRITE_GAS_LIMIT,
+    });
+
+    const hash = (await provider.request({
+      method: "eth_sendTransaction",
+      params: [
+        {
+          from: asAddress(senderAddress),
+          to: asAddress(BATTLESHIP_CONTRACT_ADDRESS),
+          data,
+          gas: numberToHex(DEFAULT_WRITE_GAS_LIMIT),
+        },
+      ],
+    })) as Hash;
+
+    devLog("contract:claimTimeout:txSent", {
+      gameId,
+      senderAddress,
+      hash,
+    });
+    return hash;
+  } catch (error) {
+    devLog("contract:claimTimeout:error", {
+      gameId,
+      senderAddress,
+      error,
+    });
+    throw error;
+  }
+}
+
 export function readCreatedGameIdFromReceipt(
   receipt: TransactionReceipt
 ): bigint | null {
