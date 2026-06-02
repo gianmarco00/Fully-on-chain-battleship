@@ -1,8 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 
 import {
+  attackCell,
   commitBoard,
   readBoardRoots,
+  readCellRevealedLogsFromReceipt,
+  revealCell,
+  revealFinalBoard,
   waitForTransaction,
   watchGameEvents,
 } from "../utils/contract";
@@ -10,7 +14,9 @@ import {
   CELL_COUNT,
   SHIP_COUNT,
   buildBoardSecret,
+  buildMerkleProof,
   cellLabel,
+  hasShip,
   loadBoardSecret,
   saveBoardSecret,
 } from "../utils/board";
@@ -25,6 +31,12 @@ import {
 } from "../utils/gameState";
 import type { BattleshipGameState } from "../utils/gameState";
 import { getCurrentAccounts } from "../utils/wallet";
+import {
+  loadShotResults,
+  saveShotResult,
+  shotResultForBoard,
+} from "../utils/shotResults";
+import type { ShotResult } from "../utils/shotResults";
 
 type GameWindowProps = {
   gameId: bigint;
@@ -44,6 +56,9 @@ const LOBBY_POLL_MS = 300;
 const PHASE_WAITING = 0;
 const PHASE_BOARD_SETUP = 1;
 const PHASE_ATTACK = 2;
+const PHASE_CELL_REVEAL = 3;
+const PHASE_AUDIT = 4;
+const PHASE_FINISHED = 5;
 const GAME_STARTING_DELAY_MS = 2000;
 const BOARD_CELLS = Array.from({ length: CELL_COUNT }, (_, cell) => cell);
 
@@ -111,8 +126,18 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
     playerAddress ? (loadBoardSecret(gameId, playerAddress)?.shipCells ?? []) : []
   );
   const [selectedAttackCell, setSelectedAttackCell] = useState<number | null>(null);
+  const [attackingCell, setAttackingCell] = useState<number | null>(null);
+  const [attackMessage, setAttackMessage] = useState("");
+  const [attackError, setAttackError] = useState("");
+  const [auditMessage, setAuditMessage] = useState("");
+  const [auditError, setAuditError] = useState("");
+  const [shotResults, setShotResults] = useState<ShotResult[]>(() =>
+    loadShotResults(gameId)
+  );
   const lastStateKey = useRef<string | null>(null);
   const latestPhase = useRef<number | null>(null);
+  const autoRevealKeys = useRef<Set<string>>(new Set());
+  const autoAuditKeys = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     let alive = true;
@@ -207,13 +232,26 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
 
     const stopWatchingEvents = watchGameEvents(
       gameId,
-      ({ eventName, transactionHash }) => {
+      ({ eventName, transactionHash, cellRevealed }) => {
         devLog("gameWindow:event:received", {
           gameId,
           windowPlayerAddress: playerAddress,
           eventName,
           transactionHash,
+          cellRevealed,
         });
+
+        if (cellRevealed) {
+          setShotResults(
+            saveShotResult(gameId, {
+              defender: cellRevealed.defender,
+              cell: cellRevealed.cell,
+              hit: cellRevealed.hit,
+              transactionHash: cellRevealed.transactionHash,
+            })
+          );
+        }
+
         loadWindowState("event");
       }
     );
@@ -240,9 +278,25 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
         ? Boolean(gameState?.player2BoardCommitted)
         : false;
   const attackPhaseVisible = gameState?.phase === PHASE_ATTACK;
+  const cellRevealPhaseVisible = gameState?.phase === PHASE_CELL_REVEAL;
+  const auditPhaseVisible = gameState?.phase === PHASE_AUDIT;
+  const finishedPhaseVisible = gameState?.phase === PHASE_FINISHED;
+  const combatPhaseVisible = attackPhaseVisible || cellRevealPhaseVisible;
   const currentPlayerIsAttacker = Boolean(
     gameState && sameAddress(playerAddress, gameState.currentAttacker)
   );
+  const currentPlayerIsProvisionalWinner = Boolean(
+    gameState && sameAddress(playerAddress, gameState.provisionalWinner)
+  );
+  const currentPlayerWon = Boolean(
+    gameState && sameAddress(playerAddress, gameState.winner)
+  );
+  const opponentAddress =
+    gameState && currentRole === "player1"
+      ? gameState.player2
+      : gameState && currentRole === "player2"
+        ? gameState.player1
+        : null;
   const ownShipCells = savedShipCells.length > 0 ? savedShipCells : selectedShipCells;
 
   useEffect(() => {
@@ -268,6 +322,269 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
 
     return () => window.clearTimeout(timeoutId);
   }, [gameId, gameStarting, playerAddress]);
+
+  useEffect(() => {
+    if (
+      !gameState ||
+      !playerAddress ||
+      !currentRole ||
+      !cellRevealPhaseVisible ||
+      currentPlayerIsAttacker
+    ) {
+      return;
+    }
+
+    const defenderAddress = playerAddress;
+    const cell = gameState.pendingTarget;
+    const revealKey = [
+      gameId.toString(),
+      defenderAddress.toLowerCase(),
+      gameState.currentAttacker.toLowerCase(),
+      cell,
+    ].join(":");
+
+    if (autoRevealKeys.current.has(revealKey)) return;
+    autoRevealKeys.current.add(revealKey);
+
+    let cancelled = false;
+
+    async function autoRevealCell() {
+      devLog("gameWindow:autoReveal:start", {
+        gameId,
+        windowPlayerAddress: defenderAddress,
+        cell,
+        label: cellLabel(cell),
+      });
+
+      try {
+        const boardSecret = loadBoardSecret(gameId, defenderAddress);
+
+        if (!boardSecret) {
+          throw new Error("No local board secret found for automatic reveal.");
+        }
+
+        const accounts = await getCurrentAccounts();
+        const activeAccount = accounts[0] ?? null;
+
+        if (!sameAddress(activeAccount, defenderAddress)) {
+          throw new Error("Switch MetaMask to the defender account to auto-reveal.");
+        }
+
+        const hit = hasShip(boardSecret.shipMask, cell);
+        const salt = boardSecret.salts[cell];
+        const proof = buildMerkleProof(boardSecret.leaves, cell);
+
+        devLog("gameWindow:autoReveal:prepared", {
+          gameId,
+          windowPlayerAddress: defenderAddress,
+          cell,
+          label: cellLabel(cell),
+          hit,
+          proofLength: proof.length,
+          boardRoot: boardSecret.root,
+        });
+
+        const txHash = await revealCell(
+          gameId,
+          cell,
+          hit,
+          salt,
+          proof,
+          defenderAddress
+        );
+
+        devLog("gameWindow:autoReveal:txSent", {
+          gameId,
+          windowPlayerAddress: defenderAddress,
+          cell,
+          label: cellLabel(cell),
+          hit,
+          txHash,
+        });
+
+        const receipt = await waitForTransaction(txHash);
+        const revealedLogs = readCellRevealedLogsFromReceipt(receipt);
+        const revealedLog = revealedLogs.find(
+          (log) =>
+            log.cell === cell && sameAddress(defenderAddress, log.defender)
+        );
+
+        if (!revealedLog) {
+          throw new Error("Reveal confirmed, but CellRevealed event was not found.");
+        }
+
+        const nextShotResults = saveShotResult(gameId, {
+          defender: revealedLog.defender,
+          cell: revealedLog.cell,
+          hit: revealedLog.hit,
+          transactionHash: revealedLog.transactionHash,
+        });
+        const refreshedState = await loadGameState(gameId);
+
+        if (cancelled) return;
+
+        setShotResults(nextShotResults);
+        setGameState(refreshedState);
+        setAttackMessage("");
+        setAttackError("");
+
+        devLog("gameWindow:autoReveal:registered", {
+          gameId,
+          windowPlayerAddress: defenderAddress,
+          cell,
+          label: cellLabel(cell),
+          hit: revealedLog.hit,
+          txHash,
+          nextPhase: refreshedState.phaseName,
+          currentAttacker: refreshedState.currentAttacker,
+        });
+      } catch (error) {
+        devLog("gameWindow:autoReveal:error", {
+          gameId,
+          windowPlayerAddress: defenderAddress,
+          cell,
+          label: cellLabel(cell),
+          error,
+        });
+      }
+    }
+
+    autoRevealCell();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    cellRevealPhaseVisible,
+    currentPlayerIsAttacker,
+    currentRole,
+    gameId,
+    gameState,
+    playerAddress,
+  ]);
+
+  useEffect(() => {
+    if (
+      !gameState ||
+      !playerAddress ||
+      !currentRole ||
+      !auditPhaseVisible ||
+      !currentPlayerIsProvisionalWinner
+    ) {
+      return;
+    }
+
+    const auditorAddress = playerAddress;
+    const provisionalWinner = gameState.provisionalWinner;
+    const actionDeadline = gameState.actionDeadline;
+    const auditKey = [
+      gameId.toString(),
+      auditorAddress.toLowerCase(),
+      provisionalWinner.toLowerCase(),
+      actionDeadline.toString(),
+    ].join(":");
+
+    if (autoAuditKeys.current.has(auditKey)) return;
+    autoAuditKeys.current.add(auditKey);
+
+    let cancelled = false;
+
+    async function autoAuditFinalBoard() {
+      devLog("gameWindow:autoAudit:start", {
+        gameId,
+        windowPlayerAddress: auditorAddress,
+        provisionalWinner,
+      });
+
+      try {
+        const boardSecret = loadBoardSecret(gameId, auditorAddress);
+
+        if (!boardSecret) {
+          throw new Error("No local board secret found for audit.");
+        }
+
+        const accounts = await getCurrentAccounts();
+        const activeAccount = accounts[0] ?? null;
+
+        if (!sameAddress(activeAccount, auditorAddress)) {
+          throw new Error("Switch MetaMask to the provisional winner to audit.");
+        }
+
+        setAuditMessage("Auditing final board...");
+        setAuditError("");
+
+        devLog("gameWindow:autoAudit:prepared", {
+          gameId,
+          windowPlayerAddress: auditorAddress,
+          shipMask: boardSecret.shipMask,
+          saltCount: boardSecret.salts.length,
+          boardRoot: boardSecret.root,
+        });
+
+        const txHash = await revealFinalBoard(
+          gameId,
+          boardSecret.shipMask,
+          boardSecret.salts,
+          auditorAddress
+        );
+
+        setAuditMessage("Audit transaction sent. Waiting for confirmation...");
+        devLog("gameWindow:autoAudit:txSent", {
+          gameId,
+          windowPlayerAddress: auditorAddress,
+          txHash,
+          shipMask: boardSecret.shipMask,
+        });
+
+        await waitForTransaction(txHash);
+        const refreshedState = await loadGameState(gameId);
+
+        if (cancelled) return;
+
+        setGameState(refreshedState);
+        setAuditMessage("");
+
+        const finished = refreshedState.phase === PHASE_FINISHED;
+
+        devLog("gameWindow:autoAudit:registered", {
+          gameId,
+          windowPlayerAddress: auditorAddress,
+          txHash,
+          finished,
+          winner: refreshedState.winner,
+          phase: refreshedState.phaseName,
+        });
+
+        if (!finished) {
+          throw new Error("Audit confirmed, but game did not finish.");
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setAuditMessage("");
+          setAuditError(error instanceof Error ? error.message : "Audit failed.");
+        }
+
+        devLog("gameWindow:autoAudit:error", {
+          gameId,
+          windowPlayerAddress: auditorAddress,
+          error,
+        });
+      }
+    }
+
+    autoAuditFinalBoard();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    auditPhaseVisible,
+    currentPlayerIsProvisionalWinner,
+    currentRole,
+    gameId,
+    gameState,
+    playerAddress,
+  ]);
 
   async function commitSelectedBoard(shipCells: number[]) {
     if (!gameState || !playerAddress) {
@@ -429,16 +746,123 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
     }
   }
 
-  function handleAttackCellClick(cell: number) {
-    if (!attackPhaseVisible || !currentPlayerIsAttacker) return;
+  async function handleAttackCellClick(cell: number) {
+    if (attackingCell !== null) return;
 
     setSelectedAttackCell(cell);
+    setAttackMessage("");
+    setAttackError("");
     devLog("gameWindow:attack:cellClick", {
       gameId,
       windowPlayerAddress: playerAddress,
       cell,
       label: cellLabel(cell),
     });
+
+    if (!gameState || !playerAddress) {
+      setAttackError("Game or player is not ready yet.");
+      devLog("gameWindow:attack:blocked", {
+        gameId,
+        windowPlayerAddress: playerAddress,
+        cell,
+        reason: "missing game state or player address",
+      });
+      return;
+    }
+
+    if (!attackPhaseVisible) {
+      setAttackError("This game is not in the attack phase.");
+      devLog("gameWindow:attack:blocked", {
+        gameId,
+        windowPlayerAddress: playerAddress,
+        cell,
+        phase: gameState.phaseName,
+        reason: "not attack phase",
+      });
+      return;
+    }
+
+    if (!currentPlayerIsAttacker) {
+      setAttackError("It is not your turn to attack.");
+      devLog("gameWindow:attack:blocked", {
+        gameId,
+        windowPlayerAddress: playerAddress,
+        cell,
+        currentAttacker: gameState.currentAttacker,
+        reason: "not current attacker",
+      });
+      return;
+    }
+
+    const accounts = await getCurrentAccounts();
+    const activeAccount = accounts[0] ?? null;
+
+    if (!sameAddress(activeAccount, playerAddress)) {
+      setAttackError("Switch MetaMask to this player before attacking.");
+      devLog("gameWindow:attack:blocked", {
+        gameId,
+        windowPlayerAddress: playerAddress,
+        activeAccount,
+        cell,
+        reason: "active account does not match window player",
+      });
+      return;
+    }
+
+    try {
+      setAttackingCell(cell);
+      setAttackMessage(`Attacking ${cellLabel(cell)}...`);
+
+      const txHash = await attackCell(gameId, cell, playerAddress);
+      setAttackMessage("Attack transaction sent. Waiting for confirmation...");
+      devLog("gameWindow:attack:txSent", {
+        gameId,
+        windowPlayerAddress: playerAddress,
+        cell,
+        label: cellLabel(cell),
+        txHash,
+      });
+
+      await waitForTransaction(txHash);
+
+      const refreshedState = await loadGameState(gameId);
+      setGameState(refreshedState);
+
+      const registered =
+        refreshedState.phase === PHASE_CELL_REVEAL &&
+        refreshedState.pendingTarget === cell &&
+        sameAddress(playerAddress, refreshedState.currentAttacker);
+
+      devLog("gameWindow:attack:registered", {
+        gameId,
+        windowPlayerAddress: playerAddress,
+        cell,
+        label: cellLabel(cell),
+        txHash,
+        registered,
+        phase: refreshedState.phaseName,
+        pendingTarget: refreshedState.pendingTarget,
+        currentAttacker: refreshedState.currentAttacker,
+      });
+
+      if (!registered) {
+        throw new Error("Attack transaction confirmed, but state did not match.");
+      }
+
+      setAttackMessage("");
+    } catch (error) {
+      setAttackMessage("");
+      setAttackError(error instanceof Error ? error.message : "Attack failed.");
+      devLog("gameWindow:attack:error", {
+        gameId,
+        windowPlayerAddress: playerAddress,
+        cell,
+        label: cellLabel(cell),
+        error,
+      });
+    } finally {
+      setAttackingCell(null);
+    }
   }
 
   if (gameStarting && !boardSetupVisible) {
@@ -451,7 +875,57 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
     );
   }
 
-  if (attackPhaseVisible) {
+  if (finishedPhaseVisible) {
+    return (
+      <main className="page game-window-page">
+        <section className="card game-window-card game-result-card">
+          <h1>{currentPlayerWon ? "You win" : "You loose"}</h1>
+        </section>
+      </main>
+    );
+  }
+
+  if (auditPhaseVisible) {
+    return (
+      <main className="page game-window-page">
+        <section className="card game-window-card combat-window-card">
+          <h1>
+            {currentPlayerIsProvisionalWinner ? "Auditing board" : "Waiting for audit"}
+          </h1>
+          {auditMessage && <div className="success">{auditMessage}</div>}
+          {auditError && <div className="warning">{auditError}</div>}
+        </section>
+      </main>
+    );
+  }
+
+  function boardCellClass({
+    baseClass,
+    result,
+    targeted,
+  }: {
+    baseClass: string;
+    result: ShotResult | null;
+    targeted: boolean;
+  }): string {
+    return [
+      "board-cell",
+      baseClass,
+      targeted ? "board-cell-targeted" : "",
+      result?.hit ? "board-cell-hit" : "",
+      result && !result.hit ? "board-cell-miss" : "",
+    ]
+      .filter(Boolean)
+      .join(" ");
+  }
+
+  function boardCellText(result: ShotResult | null, cell: number): string {
+    if (!result) return cellLabel(cell);
+
+    return result.hit ? "HIT" : "MISS";
+  }
+
+  if (combatPhaseVisible) {
     if (currentPlayerIsAttacker) {
       return (
         <main className="page game-window-page">
@@ -459,22 +933,33 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
             <h1>Attack</h1>
 
             <div className="fleet-board attack-board" aria-label="Enemy board">
-              {BOARD_CELLS.map((cell) => (
-                <button
-                  key={cell}
-                  type="button"
-                  className={
-                    selectedAttackCell === cell
-                      ? "board-cell board-cell-attackable board-cell-targeted"
-                      : "board-cell board-cell-attackable"
-                  }
-                  onClick={() => handleAttackCellClick(cell)}
-                  aria-label={`Attack ${cellLabel(cell)}`}
-                >
-                  {cellLabel(cell)}
-                </button>
-              ))}
+              {BOARD_CELLS.map((cell) => {
+                const result = shotResultForBoard(shotResults, opponentAddress, cell);
+                const targeted =
+                  selectedAttackCell === cell ||
+                  (cellRevealPhaseVisible && gameState?.pendingTarget === cell);
+
+                return (
+                  <button
+                    key={cell}
+                    type="button"
+                    className={boardCellClass({
+                      baseClass: "board-cell-attackable",
+                      result,
+                      targeted: targeted && !result,
+                    })}
+                    onClick={() => handleAttackCellClick(cell)}
+                    disabled={attackingCell !== null || cellRevealPhaseVisible}
+                    aria-label={`Attack ${cellLabel(cell)}`}
+                  >
+                    {boardCellText(result, cell)}
+                  </button>
+                );
+              })}
             </div>
+
+            {attackMessage && <div className="success">{attackMessage}</div>}
+            {attackError && <div className="warning">{attackError}</div>}
           </section>
         </main>
       );
@@ -486,19 +971,30 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
           <h1>Waiting to be attacked</h1>
 
           <div className="fleet-board own-board" aria-label="Your board">
-            {BOARD_CELLS.map((cell) => (
-              <div
-                key={cell}
-                className={
-                  ownShipCells.includes(cell)
-                    ? "board-cell board-cell-readonly board-cell-selected"
-                    : "board-cell board-cell-readonly"
-                }
-                aria-label={`Cell ${cellLabel(cell)}`}
-              >
-                {cellLabel(cell)}
-              </div>
-            ))}
+            {BOARD_CELLS.map((cell) => {
+              const result = shotResultForBoard(shotResults, playerAddress, cell);
+              const targeted =
+                cellRevealPhaseVisible && gameState?.pendingTarget === cell;
+
+              return (
+                <div
+                  key={cell}
+                  className={boardCellClass({
+                    baseClass: [
+                      "board-cell-readonly",
+                      ownShipCells.includes(cell) ? "board-cell-selected" : "",
+                    ]
+                      .filter(Boolean)
+                      .join(" "),
+                    result,
+                    targeted: targeted && !result,
+                  })}
+                  aria-label={`Cell ${cellLabel(cell)}`}
+                >
+                  {boardCellText(result, cell)}
+                </div>
+              );
+            })}
           </div>
         </section>
       </main>

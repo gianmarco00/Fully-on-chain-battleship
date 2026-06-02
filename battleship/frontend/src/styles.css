@@ -292,6 +292,28 @@ h3 {
   background: #2563eb;
 }
 
+.board-cell-hit,
+.board-cell-hit:nth-child(odd),
+.board-cell-hit:hover,
+.board-cell-hit:focus-visible,
+.board-cell-readonly.board-cell-hit:hover,
+.board-cell-readonly.board-cell-hit:focus-visible {
+  color: #ffffff;
+  border-color: #991b1b;
+  background: #dc2626;
+}
+
+.board-cell-miss,
+.board-cell-miss:nth-child(odd),
+.board-cell-miss:hover,
+.board-cell-miss:focus-visible,
+.board-cell-readonly.board-cell-miss:hover,
+.board-cell-readonly.board-cell-miss:focus-visible {
+  color: #ffffff;
+  border-color: #1d4ed8;
+  background: #2563eb;
+}
+
 .board-cell-readonly {
   cursor: default;
 }

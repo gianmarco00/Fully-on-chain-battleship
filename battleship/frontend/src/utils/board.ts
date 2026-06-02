@@ -151,6 +151,35 @@ export function buildMerkleRoot(leaves: readonly Hex[]): Hex {
   return layer[0];
 }
 
+export function buildMerkleProof(leaves: readonly Hex[], cell: number): Hex[] {
+  let index = validateCell(cell);
+
+  if (leaves.length !== CELL_COUNT) {
+    throw new Error(`Merkle tree needs exactly ${CELL_COUNT} leaves.`);
+  }
+
+  let layer = [...leaves];
+  const proof: Hex[] = [];
+
+  while (layer.length > 1) {
+    const siblingIndex = index % 2 === 0 ? index + 1 : index - 1;
+    proof.push(layer[siblingIndex] ?? layer[index]);
+
+    const nextLayer: Hex[] = [];
+
+    for (let layerIndex = 0; layerIndex < layer.length; layerIndex += 2) {
+      const left = layer[layerIndex];
+      const right = layer[layerIndex + 1] ?? left;
+      nextLayer.push(hashPair(left, right));
+    }
+
+    layer = nextLayer;
+    index = Math.floor(index / 2);
+  }
+
+  return proof;
+}
+
 export function buildBoardSecret({
   gameId,
   playerAddress,

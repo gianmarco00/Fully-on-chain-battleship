@@ -5,7 +5,7 @@ import {
   http,
   numberToHex,
 } from "viem";
-import type { Address, Hash, TransactionReceipt } from "viem";
+import type { Address, Hash, Hex, TransactionReceipt } from "viem";
 
 import {
   UZHETH_CHAIN,
@@ -36,6 +36,16 @@ export type BattleshipGameEventName =
 type GameEvent = {
   eventName: BattleshipGameEventName;
   transactionHash: Hash | null;
+  cellRevealed: CellRevealedLog | null;
+};
+
+export type CellRevealedLog = {
+  gameId: bigint;
+  defender: Address;
+  cell: number;
+  hit: boolean;
+  defenderHitMask: number;
+  transactionHash: Hash | null;
 };
 
 const GAME_EVENTS_TO_WATCH: readonly BattleshipGameEventName[] = [
@@ -49,6 +59,33 @@ const GAME_EVENTS_TO_WATCH: readonly BattleshipGameEventName[] = [
   "TimeoutClaimed",
   "GameCancelled",
 ];
+
+function decodeCellRevealedEventLog(log: {
+  data: Hex;
+  topics: readonly Hex[];
+  transactionHash?: Hash | null;
+}): CellRevealedLog | null {
+  if (log.topics.length === 0) return null;
+
+  const event = decodeEventLog({
+    abi: BATTLESHIP_ABI,
+    data: log.data,
+    topics: [...log.topics] as [signature: Hex, ...args: Hex[]],
+  });
+
+  if (event.eventName !== "CellRevealed") return null;
+
+  const args = event.args as unknown as Record<string, unknown>;
+
+  return {
+    gameId: args.gameId as bigint,
+    defender: asAddress(String(args.defender)),
+    cell: Number(args.cell),
+    hit: Boolean(args.hit),
+    defenderHitMask: Number(args.defenderHitMask),
+    transactionHash: log.transactionHash ?? null,
+  };
+}
 
 function getEthereumProvider() {
   if (!window.ethereum) {
@@ -322,6 +359,198 @@ export async function commitBoard(
   }
 }
 
+export async function attackCell(
+  gameId: bigint,
+  cell: number,
+  senderAddress: string
+): Promise<Hash> {
+  devLog("contract:attackCell:start", {
+    gameId,
+    cell,
+    senderAddress,
+    contract: BATTLESHIP_CONTRACT_ADDRESS,
+  });
+
+  try {
+    const provider = getEthereumProvider();
+    const data = encodeFunctionData({
+      abi: BATTLESHIP_ABI,
+      functionName: "attackCell",
+      args: [gameId, cell],
+    });
+
+    devLog("contract:attackCell:sendTransaction:request", {
+      gameId,
+      cell,
+      senderAddress,
+      contract: BATTLESHIP_CONTRACT_ADDRESS,
+      functionName: "attackCell",
+      gas: DEFAULT_WRITE_GAS_LIMIT,
+    });
+
+    const hash = (await provider.request({
+      method: "eth_sendTransaction",
+      params: [
+        {
+          from: asAddress(senderAddress),
+          to: asAddress(BATTLESHIP_CONTRACT_ADDRESS),
+          data,
+          gas: numberToHex(DEFAULT_WRITE_GAS_LIMIT),
+        },
+      ],
+    })) as Hash;
+
+    devLog("contract:attackCell:txSent", {
+      gameId,
+      cell,
+      senderAddress,
+      hash,
+    });
+    return hash;
+  } catch (error) {
+    devLog("contract:attackCell:error", {
+      gameId,
+      cell,
+      senderAddress,
+      error,
+    });
+    throw error;
+  }
+}
+
+export async function revealCell(
+  gameId: bigint,
+  cell: number,
+  hit: boolean,
+  salt: Hex,
+  proof: readonly Hex[],
+  senderAddress: string
+): Promise<Hash> {
+  devLog("contract:revealCell:start", {
+    gameId,
+    cell,
+    hit,
+    senderAddress,
+    proofLength: proof.length,
+    contract: BATTLESHIP_CONTRACT_ADDRESS,
+  });
+
+  try {
+    const provider = getEthereumProvider();
+    const data = encodeFunctionData({
+      abi: BATTLESHIP_ABI,
+      functionName: "revealCell",
+      args: [gameId, cell, hit, salt, proof],
+    });
+
+    devLog("contract:revealCell:sendTransaction:request", {
+      gameId,
+      cell,
+      hit,
+      senderAddress,
+      proofLength: proof.length,
+      contract: BATTLESHIP_CONTRACT_ADDRESS,
+      functionName: "revealCell",
+      gas: DEFAULT_WRITE_GAS_LIMIT,
+    });
+
+    const hash = (await provider.request({
+      method: "eth_sendTransaction",
+      params: [
+        {
+          from: asAddress(senderAddress),
+          to: asAddress(BATTLESHIP_CONTRACT_ADDRESS),
+          data,
+          gas: numberToHex(DEFAULT_WRITE_GAS_LIMIT),
+        },
+      ],
+    })) as Hash;
+
+    devLog("contract:revealCell:txSent", {
+      gameId,
+      cell,
+      hit,
+      senderAddress,
+      hash,
+    });
+    return hash;
+  } catch (error) {
+    devLog("contract:revealCell:error", {
+      gameId,
+      cell,
+      hit,
+      senderAddress,
+      proofLength: proof.length,
+      error,
+    });
+    throw error;
+  }
+}
+
+export async function revealFinalBoard(
+  gameId: bigint,
+  shipMask: number,
+  salts: readonly Hex[],
+  senderAddress: string
+): Promise<Hash> {
+  devLog("contract:revealFinalBoard:start", {
+    gameId,
+    shipMask,
+    saltCount: salts.length,
+    senderAddress,
+    contract: BATTLESHIP_CONTRACT_ADDRESS,
+  });
+
+  try {
+    const provider = getEthereumProvider();
+    const data = encodeFunctionData({
+      abi: BATTLESHIP_ABI,
+      functionName: "revealFinalBoard",
+      args: [gameId, shipMask, salts],
+    });
+
+    devLog("contract:revealFinalBoard:sendTransaction:request", {
+      gameId,
+      shipMask,
+      saltCount: salts.length,
+      senderAddress,
+      contract: BATTLESHIP_CONTRACT_ADDRESS,
+      functionName: "revealFinalBoard",
+      gas: DEFAULT_WRITE_GAS_LIMIT,
+    });
+
+    const hash = (await provider.request({
+      method: "eth_sendTransaction",
+      params: [
+        {
+          from: asAddress(senderAddress),
+          to: asAddress(BATTLESHIP_CONTRACT_ADDRESS),
+          data,
+          gas: numberToHex(DEFAULT_WRITE_GAS_LIMIT),
+        },
+      ],
+    })) as Hash;
+
+    devLog("contract:revealFinalBoard:txSent", {
+      gameId,
+      shipMask,
+      saltCount: salts.length,
+      senderAddress,
+      hash,
+    });
+    return hash;
+  } catch (error) {
+    devLog("contract:revealFinalBoard:error", {
+      gameId,
+      shipMask,
+      saltCount: salts.length,
+      senderAddress,
+      error,
+    });
+    throw error;
+  }
+}
+
 export function readCreatedGameIdFromReceipt(
   receipt: TransactionReceipt
 ): bigint | null {
@@ -368,6 +597,45 @@ export function readCreatedGameIdFromReceipt(
     txHash: receipt.transactionHash,
   });
   return null;
+}
+
+export function readCellRevealedLogsFromReceipt(
+  receipt: TransactionReceipt
+): CellRevealedLog[] {
+  devLog("contract:revealCell:decodeReceipt:start", {
+    txHash: receipt.transactionHash,
+    logs: receipt.logs.length,
+  });
+
+  const revealedLogs: CellRevealedLog[] = [];
+
+  for (const log of receipt.logs) {
+    if (log.address.toLowerCase() !== BATTLESHIP_CONTRACT_ADDRESS.toLowerCase()) {
+      continue;
+    }
+
+    try {
+      const revealedLog = decodeCellRevealedEventLog({
+        data: log.data,
+        topics: log.topics,
+        transactionHash: receipt.transactionHash,
+      });
+
+      if (revealedLog) revealedLogs.push(revealedLog);
+    } catch (error) {
+      devLog("contract:revealCell:decodeReceipt:skipLog", {
+        txHash: receipt.transactionHash,
+        error,
+      });
+    }
+  }
+
+  devLog("contract:revealCell:decodeReceipt:success", {
+    txHash: receipt.transactionHash,
+    revealedCount: revealedLogs.length,
+    revealedLogs,
+  });
+  return revealedLogs;
 }
 
 export async function waitForTransaction(
@@ -419,9 +687,28 @@ export function watchGameEvents(
       args: { gameId },
       onLogs(logs) {
         for (const log of logs) {
+          let cellRevealed: CellRevealedLog | null = null;
+
+          if (eventName === "CellRevealed") {
+            try {
+              cellRevealed = decodeCellRevealedEventLog({
+                data: log.data,
+                topics: log.topics,
+                transactionHash: log.transactionHash ?? null,
+              });
+            } catch (error) {
+              devLog("contract:watchGameEvents:decodeCellRevealed:error", {
+                gameId,
+                eventName,
+                error,
+              });
+            }
+          }
+
           onEvent({
             eventName,
             transactionHash: log.transactionHash ?? null,
+            cellRevealed,
           });
         }
       },
