@@ -279,6 +279,39 @@ h3 {
   background: #374151;
 }
 
+.board-cell-attackable {
+  cursor: pointer;
+}
+
+.board-cell-targeted,
+.board-cell-targeted:nth-child(odd),
+.board-cell-targeted:hover,
+.board-cell-targeted:focus-visible {
+  color: #ffffff;
+  border-color: #1d4ed8;
+  background: #2563eb;
+}
+
+.board-cell-readonly {
+  cursor: default;
+}
+
+.board-cell-readonly:hover,
+.board-cell-readonly:focus-visible {
+  outline: none;
+  background: #eff6ff;
+}
+
+.board-cell-readonly:nth-child(odd):hover,
+.board-cell-readonly:nth-child(odd):focus-visible {
+  background: #ffffff;
+}
+
+.board-cell-readonly.board-cell-selected:hover,
+.board-cell-readonly.board-cell-selected:focus-visible {
+  background: #1f2937;
+}
+
 .board-cell:disabled {
   cursor: wait;
   opacity: 0.85;

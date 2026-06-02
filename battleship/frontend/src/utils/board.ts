@@ -9,7 +9,7 @@ import type { Address, Hex } from "viem";
 
 import { BATTLESHIP_CONTRACT_ADDRESS } from "../config/contract";
 import { asAddress } from "./contract";
-import { devLog } from "./devLog";
+import { devLog, devTrace } from "./devLog";
 
 export const BOARD_SIZE = 5;
 export const CELL_COUNT = BOARD_SIZE * BOARD_SIZE;
@@ -203,7 +203,7 @@ export function loadBoardSecret(
   gameId: bigint,
   playerAddress: string
 ): BoardSecret | null {
-  devLog("board:secret:load", { gameId, playerAddress });
+  devTrace("board:secret:load", { gameId, playerAddress });
   const raw = localStorage.getItem(boardSecretKey(gameId, playerAddress));
 
   if (!raw) return null;

@@ -11,6 +11,7 @@ import {
   SHIP_COUNT,
   buildBoardSecret,
   cellLabel,
+  loadBoardSecret,
   saveBoardSecret,
 } from "../utils/board";
 import { devLog } from "../utils/devLog";
@@ -41,6 +42,8 @@ type RefreshReason = "initial" | "poll" | "lobby-poll" | "focus" | "event";
 const POLL_MS = 1000;
 const LOBBY_POLL_MS = 300;
 const PHASE_WAITING = 0;
+const PHASE_BOARD_SETUP = 1;
+const PHASE_ATTACK = 2;
 const GAME_STARTING_DELAY_MS = 2000;
 const BOARD_CELLS = Array.from({ length: CELL_COUNT }, (_, cell) => cell);
 
@@ -104,6 +107,10 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
   const [committingBoard, setCommittingBoard] = useState(false);
   const [boardCommitMessage, setBoardCommitMessage] = useState("");
   const [boardCommitError, setBoardCommitError] = useState("");
+  const [savedShipCells, setSavedShipCells] = useState<number[]>(() =>
+    playerAddress ? (loadBoardSecret(gameId, playerAddress)?.shipCells ?? []) : []
+  );
+  const [selectedAttackCell, setSelectedAttackCell] = useState<number | null>(null);
   const lastStateKey = useRef<string | null>(null);
   const latestPhase = useRef<number | null>(null);
 
@@ -221,7 +228,8 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
     };
   }, [gameId, playerAddress]);
 
-  const gameStarting = gameState ? !isZeroAddress(gameState.player2) : false;
+  const gameStarting =
+    gameState?.phase === PHASE_BOARD_SETUP && !isZeroAddress(gameState.player2);
   const boardSetupVisible =
     gameStarting && boardSetupReadyGameId === gameId.toString();
   const currentRole = gameState ? playerRole(gameState, playerAddress) : null;
@@ -231,6 +239,11 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
       : currentRole === "player2"
         ? Boolean(gameState?.player2BoardCommitted)
         : false;
+  const attackPhaseVisible = gameState?.phase === PHASE_ATTACK;
+  const currentPlayerIsAttacker = Boolean(
+    gameState && sameAddress(playerAddress, gameState.currentAttacker)
+  );
+  const ownShipCells = savedShipCells.length > 0 ? savedShipCells : selectedShipCells;
 
   useEffect(() => {
     if (!gameStarting) {
@@ -322,6 +335,7 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
       setBoardCommitMessage("Committing board root...");
 
       saveBoardSecret(boardSecret);
+      setSavedShipCells(boardSecret.shipCells);
       devLog("gameWindow:boardCommit:prepared", {
         gameId,
         windowPlayerAddress: playerAddress,
@@ -415,11 +429,77 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
     }
   }
 
+  function handleAttackCellClick(cell: number) {
+    if (!attackPhaseVisible || !currentPlayerIsAttacker) return;
+
+    setSelectedAttackCell(cell);
+    devLog("gameWindow:attack:cellClick", {
+      gameId,
+      windowPlayerAddress: playerAddress,
+      cell,
+      label: cellLabel(cell),
+    });
+  }
+
   if (gameStarting && !boardSetupVisible) {
     return (
       <main className="page game-window-page">
         <section className="card game-window-card game-starting-card">
           <h1>Game Starting...</h1>
+        </section>
+      </main>
+    );
+  }
+
+  if (attackPhaseVisible) {
+    if (currentPlayerIsAttacker) {
+      return (
+        <main className="page game-window-page">
+          <section className="card game-window-card combat-window-card">
+            <h1>Attack</h1>
+
+            <div className="fleet-board attack-board" aria-label="Enemy board">
+              {BOARD_CELLS.map((cell) => (
+                <button
+                  key={cell}
+                  type="button"
+                  className={
+                    selectedAttackCell === cell
+                      ? "board-cell board-cell-attackable board-cell-targeted"
+                      : "board-cell board-cell-attackable"
+                  }
+                  onClick={() => handleAttackCellClick(cell)}
+                  aria-label={`Attack ${cellLabel(cell)}`}
+                >
+                  {cellLabel(cell)}
+                </button>
+              ))}
+            </div>
+          </section>
+        </main>
+      );
+    }
+
+    return (
+      <main className="page game-window-page">
+        <section className="card game-window-card combat-window-card">
+          <h1>Waiting to be attacked</h1>
+
+          <div className="fleet-board own-board" aria-label="Your board">
+            {BOARD_CELLS.map((cell) => (
+              <div
+                key={cell}
+                className={
+                  ownShipCells.includes(cell)
+                    ? "board-cell board-cell-readonly board-cell-selected"
+                    : "board-cell board-cell-readonly"
+                }
+                aria-label={`Cell ${cellLabel(cell)}`}
+              >
+                {cellLabel(cell)}
+              </div>
+            ))}
+          </div>
         </section>
       </main>
     );
