@@ -208,6 +208,13 @@ h3 {
   width: min(560px, 100%);
 }
 
+.game-starting-card {
+  min-height: 260px;
+  display: grid;
+  place-items: center;
+  text-align: center;
+}
+
 .lobby-messages {
   display: grid;
   gap: 10px;

@@ -190,6 +190,18 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
     };
   }, [gameId, playerAddress]);
 
+  const gameStarting = gameState ? !isZeroAddress(gameState.player2) : false;
+
+  if (gameStarting) {
+    return (
+      <main className="page game-window-page">
+        <section className="card game-window-card game-starting-card">
+          <h1>Game Starting...</h1>
+        </section>
+      </main>
+    );
+  }
+
   return (
     <main className="page game-window-page">
       <section className="card game-window-card">
