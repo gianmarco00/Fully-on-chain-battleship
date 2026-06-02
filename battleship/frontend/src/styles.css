@@ -229,6 +229,44 @@ h3 {
   font-weight: 700;
 }
 
+.fleet-board {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 6px;
+  width: min(100%, 420px);
+  margin: 24px auto 0;
+  aspect-ratio: 1;
+  padding: 8px;
+  border: 1px solid #bfdbfe;
+  border-radius: 14px;
+  background: #dbeafe;
+}
+
+.board-cell {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  aspect-ratio: 1;
+  border: 1px solid rgb(37 99 235 / 24%);
+  border-radius: 8px;
+  padding: 0;
+  color: #0f172a;
+  background: #eff6ff;
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.board-cell:nth-child(odd) {
+  background: #ffffff;
+}
+
+.board-cell:hover,
+.board-cell:focus-visible {
+  outline: 3px solid #2563eb;
+  outline-offset: 1px;
+  background: #bfdbfe;
+}
+
 @media (max-width: 620px) {
   .page {
     padding: 18px;

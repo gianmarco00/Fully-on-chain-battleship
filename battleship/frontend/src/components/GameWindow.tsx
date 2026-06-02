@@ -28,9 +28,20 @@ type RefreshReason = "initial" | "poll" | "lobby-poll" | "focus" | "event";
 const POLL_MS = 1000;
 const LOBBY_POLL_MS = 300;
 const PHASE_WAITING = 0;
+const BOARD_SIZE = 5;
+const CELL_COUNT = BOARD_SIZE * BOARD_SIZE;
+const GAME_STARTING_DELAY_MS = 2000;
+const BOARD_CELLS = Array.from({ length: CELL_COUNT }, (_, cell) => cell);
 
 function sameAddress(left: string | null, right: string): boolean {
   return Boolean(left && left.toLowerCase() === right.toLowerCase());
+}
+
+function cellLabel(cell: number): string {
+  const column = String.fromCharCode("A".charCodeAt(0) + (cell % BOARD_SIZE));
+  const row = Math.floor(cell / BOARD_SIZE) + 1;
+
+  return `${column}${row}`;
 }
 
 function buildLobbyView(
@@ -73,6 +84,9 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
     messages: [],
     role: "Viewer",
   });
+  const [boardSetupReadyGameId, setBoardSetupReadyGameId] = useState<string | null>(
+    null
+  );
   const lastStateKey = useRef<string | null>(null);
   const latestPhase = useRef<number | null>(null);
 
@@ -191,12 +205,72 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
   }, [gameId, playerAddress]);
 
   const gameStarting = gameState ? !isZeroAddress(gameState.player2) : false;
+  const boardSetupVisible =
+    gameStarting && boardSetupReadyGameId === gameId.toString();
 
-  if (gameStarting) {
+  useEffect(() => {
+    if (!gameStarting) {
+      return;
+    }
+
+    const gameIdText = gameId.toString();
+
+    devLog("gameWindow:boardSetup:scheduled", {
+      gameId,
+      windowPlayerAddress: playerAddress,
+      delayMs: GAME_STARTING_DELAY_MS,
+    });
+
+    const timeoutId = window.setTimeout(() => {
+      setBoardSetupReadyGameId(gameIdText);
+      devLog("gameWindow:boardSetup:visible", {
+        gameId,
+        windowPlayerAddress: playerAddress,
+      });
+    }, GAME_STARTING_DELAY_MS);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [gameId, gameStarting, playerAddress]);
+
+  function handleBoardCellClick(cell: number) {
+    devLog("gameWindow:boardSetup:cellClick", {
+      gameId,
+      windowPlayerAddress: playerAddress,
+      cell,
+      label: cellLabel(cell),
+    });
+  }
+
+  if (gameStarting && !boardSetupVisible) {
     return (
       <main className="page game-window-page">
         <section className="card game-window-card game-starting-card">
           <h1>Game Starting...</h1>
+        </section>
+      </main>
+    );
+  }
+
+  if (gameStarting && boardSetupVisible) {
+    return (
+      <main className="page game-window-page">
+        <section className="card game-window-card">
+          <p className="eyebrow">Game {gameId.toString()}</p>
+          <h1>Position your fleet</h1>
+
+          <div className="fleet-board" aria-label="Battleship board">
+            {BOARD_CELLS.map((cell) => (
+              <button
+                key={cell}
+                type="button"
+                className="board-cell"
+                onClick={() => handleBoardCellClick(cell)}
+                aria-label={`Cell ${cellLabel(cell)}`}
+              >
+                {cellLabel(cell)}
+              </button>
+            ))}
+          </div>
         </section>
       </main>
     );
