@@ -1,5 +1,5 @@
 import { readBoardRoots, readGame, readHitMasks } from "./contract";
-import { devLog } from "./devLog";
+import { devLog, devTrace } from "./devLog";
 
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
 
@@ -170,12 +170,12 @@ export function logGameStateSnapshot(
 export async function loadGameHeader(
   gameId: bigint
 ): Promise<BattleshipGameState> {
-  devLog("gameState:loadHeader:start", { gameId });
+  devTrace("gameState:loadHeader:start", { gameId });
 
   try {
     const state = buildHeaderState(gameId, await readGame(gameId));
 
-    devLog("gameState:loadHeader:success", summarizeGameState(state));
+    devTrace("gameState:loadHeader:success", summarizeGameState(state));
     return state;
   } catch (error) {
     devLog("gameState:loadHeader:error", { gameId, error });
@@ -186,7 +186,7 @@ export async function loadGameHeader(
 export async function loadGameState(
   gameId: bigint
 ): Promise<BattleshipGameState> {
-  devLog("gameState:load:start", { gameId });
+  devTrace("gameState:load:start", { gameId });
 
   try {
     const [game, boardRoots, hitMasks] = await Promise.all([
@@ -196,7 +196,7 @@ export async function loadGameState(
     ]);
     const state = parseGameState(gameId, game, boardRoots, hitMasks);
 
-    devLog("gameState:load:success", summarizeGameState(state));
+    devTrace("gameState:load:success", summarizeGameState(state));
     return state;
   } catch (error) {
     devLog("gameState:load:error", { gameId, error });

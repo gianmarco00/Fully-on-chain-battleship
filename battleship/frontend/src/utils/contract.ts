@@ -17,7 +17,7 @@ import {
   BATTLESHIP_ABI,
   BATTLESHIP_CONTRACT_ADDRESS,
 } from "../config/contract";
-import { devLog } from "./devLog";
+import { devLog, devTrace } from "./devLog";
 
 const DEFAULT_WRITE_GAS_LIMIT = 250_000n;
 const FAST_POLLING_INTERVAL_MS = 500;
@@ -75,7 +75,7 @@ export function asAddress(value: string): Address {
 }
 
 export async function readNextGameId(): Promise<bigint> {
-  devLog("contract:nextGameId:start", {
+  devTrace("contract:nextGameId:start", {
     contract: BATTLESHIP_CONTRACT_ADDRESS,
   });
 
@@ -88,7 +88,7 @@ export async function readNextGameId(): Promise<bigint> {
       functionName: "nextGameId",
     })) as bigint;
 
-    devLog("contract:nextGameId:success", { value });
+    devTrace("contract:nextGameId:success", { value });
     return value;
   } catch (error) {
     devLog("contract:nextGameId:error", { error });
@@ -97,7 +97,7 @@ export async function readNextGameId(): Promise<bigint> {
 }
 
 export async function readContractCodeBytes(): Promise<number> {
-  devLog("contract:code:start", { contract: BATTLESHIP_CONTRACT_ADDRESS });
+  devTrace("contract:code:start", { contract: BATTLESHIP_CONTRACT_ADDRESS });
 
   const client = createBattleshipPublicClient();
 
@@ -107,7 +107,7 @@ export async function readContractCodeBytes(): Promise<number> {
     });
     const byteCount = bytecode ? (bytecode.length - 2) / 2 : 0;
 
-    devLog("contract:code:success", { byteCount });
+    devTrace("contract:code:success", { byteCount });
     return byteCount;
   } catch (error) {
     devLog("contract:code:error", { error });
@@ -116,7 +116,7 @@ export async function readContractCodeBytes(): Promise<number> {
 }
 
 export async function readGame(gameId: bigint): Promise<readonly unknown[]> {
-  devLog("contract:getGame:start", { gameId });
+  devTrace("contract:getGame:start", { gameId });
   const client = createBattleshipPublicClient();
 
   try {
@@ -127,7 +127,7 @@ export async function readGame(gameId: bigint): Promise<readonly unknown[]> {
       args: [gameId],
     })) as readonly unknown[];
 
-    devLog("contract:getGame:success", { gameId, game });
+    devTrace("contract:getGame:success", { gameId, game });
     return game;
   } catch (error) {
     devLog("contract:getGame:error", { gameId, error });
@@ -138,7 +138,7 @@ export async function readGame(gameId: bigint): Promise<readonly unknown[]> {
 export async function readBoardRoots(
   gameId: bigint
 ): Promise<readonly unknown[]> {
-  devLog("contract:getBoardRoots:start", { gameId });
+  devTrace("contract:getBoardRoots:start", { gameId });
   const client = createBattleshipPublicClient();
 
   try {
@@ -149,7 +149,7 @@ export async function readBoardRoots(
       args: [gameId],
     })) as readonly unknown[];
 
-    devLog("contract:getBoardRoots:success", { gameId, boardRoots });
+    devTrace("contract:getBoardRoots:success", { gameId, boardRoots });
     return boardRoots;
   } catch (error) {
     devLog("contract:getBoardRoots:error", { gameId, error });
@@ -158,7 +158,7 @@ export async function readBoardRoots(
 }
 
 export async function readHitMasks(gameId: bigint): Promise<readonly unknown[]> {
-  devLog("contract:getHitMasks:start", { gameId });
+  devTrace("contract:getHitMasks:start", { gameId });
   const client = createBattleshipPublicClient();
 
   try {
@@ -169,7 +169,7 @@ export async function readHitMasks(gameId: bigint): Promise<readonly unknown[]> 
       args: [gameId],
     })) as readonly unknown[];
 
-    devLog("contract:getHitMasks:success", { gameId, hitMasks });
+    devTrace("contract:getHitMasks:success", { gameId, hitMasks });
     return hitMasks;
   } catch (error) {
     devLog("contract:getHitMasks:error", { gameId, error });
