@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 
+import { GameWindow } from "./components/GameWindow";
 import { LobbyActions } from "./components/LobbyActions";
 import { UZHETH_CHAIN_ID_DECIMAL, isCorrectChain } from "./config/chain";
 import { BATTLESHIP_CONTRACT_ADDRESS } from "./config/contract";
@@ -9,6 +10,7 @@ import {
   readNextGameId,
 } from "./utils/contract";
 import { devLog } from "./utils/devLog";
+import { openGameWindow } from "./utils/gameWindow";
 import {
   connectWallet,
   getCurrentAccounts,
@@ -20,7 +22,7 @@ import {
 
 import "./styles.css";
 
-function App() {
+function MainApp() {
   const [address, setAddress] = useState<string | null>(null);
   const [chainId, setChainId] = useState<string | null>(null);
   const [message, setMessage] = useState("");
@@ -100,6 +102,7 @@ function App() {
 
   function handleGameUpdated(gameId: bigint) {
     devLog("app:gameUpdated", { gameId });
+    openGameWindow(gameId, address ?? undefined);
 
     handleReadContract().catch(() => {
       // The transaction succeeded; keep the action status even if refresh fails.
@@ -226,6 +229,21 @@ function App() {
       </section>
     </main>
   );
+}
+
+function App() {
+  const params = new URLSearchParams(window.location.search);
+  const isGameWindow = params.get("mode") === "game";
+  const gameWindowId = params.get("gameId");
+  const playerAddress = params.get("player");
+
+  if (isGameWindow && gameWindowId && /^\d+$/.test(gameWindowId)) {
+    return (
+      <GameWindow gameId={BigInt(gameWindowId)} playerAddress={playerAddress} />
+    );
+  }
+
+  return <MainApp />;
 }
 
 export default App;

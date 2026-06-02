@@ -22,6 +22,34 @@ import { devLog } from "./devLog";
 const DEFAULT_WRITE_GAS_LIMIT = 250_000n;
 const FAST_POLLING_INTERVAL_MS = 500;
 
+export type BattleshipGameEventName =
+  | "GameJoined"
+  | "BoardCommitted"
+  | "CellAttacked"
+  | "CellRevealed"
+  | "AuditStarted"
+  | "BoardAudited"
+  | "GameFinished"
+  | "TimeoutClaimed"
+  | "GameCancelled";
+
+type GameEvent = {
+  eventName: BattleshipGameEventName;
+  transactionHash: Hash | null;
+};
+
+const GAME_EVENTS_TO_WATCH: readonly BattleshipGameEventName[] = [
+  "GameJoined",
+  "BoardCommitted",
+  "CellAttacked",
+  "CellRevealed",
+  "AuditStarted",
+  "BoardAudited",
+  "GameFinished",
+  "TimeoutClaimed",
+  "GameCancelled",
+];
+
 function getEthereumProvider() {
   if (!window.ethereum) {
     throw new Error("No Ethereum wallet provider found.");
@@ -310,6 +338,51 @@ export async function waitForTransaction(
     devLog("contract:waitForTransaction:error", { txHash, error });
     throw error;
   }
+}
+
+export function watchGameEvents(
+  gameId: bigint,
+  onEvent: (event: GameEvent) => void
+): () => void {
+  const client = createBattleshipPublicClient();
+
+  devLog("contract:watchGameEvents:start", {
+    gameId,
+    events: GAME_EVENTS_TO_WATCH,
+    pollingIntervalMs: FAST_POLLING_INTERVAL_MS,
+  });
+
+  const unwatchers = GAME_EVENTS_TO_WATCH.map((eventName) =>
+    client.watchContractEvent({
+      address: asAddress(BATTLESHIP_CONTRACT_ADDRESS),
+      abi: BATTLESHIP_ABI,
+      eventName,
+      args: { gameId },
+      onLogs(logs) {
+        for (const log of logs) {
+          onEvent({
+            eventName,
+            transactionHash: log.transactionHash ?? null,
+          });
+        }
+      },
+      onError(error) {
+        devLog("contract:watchGameEvents:error", {
+          gameId,
+          eventName,
+          error,
+        });
+      },
+    })
+  );
+
+  return () => {
+    for (const unwatch of unwatchers) {
+      unwatch();
+    }
+
+    devLog("contract:watchGameEvents:stop", { gameId });
+  };
 }
 
 export async function assertCorrectChain(): Promise<void> {

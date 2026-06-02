@@ -199,6 +199,29 @@ h3 {
   text-align: right;
 }
 
+.game-window-page {
+  align-items: start;
+  padding: 24px;
+}
+
+.game-window-card {
+  width: min(560px, 100%);
+}
+
+.lobby-messages {
+  display: grid;
+  gap: 10px;
+  margin-top: 20px;
+}
+
+.lobby-messages > div {
+  border-radius: 14px;
+  padding: 14px 16px;
+  background: #eef2ff;
+  color: #312e81;
+  font-weight: 700;
+}
+
 @media (max-width: 620px) {
   .page {
     padding: 18px;
@@ -225,5 +248,9 @@ h3 {
 
   .game-state-panel strong {
     text-align: left;
+  }
+
+  .game-window-page {
+    padding: 16px;
   }
 }
