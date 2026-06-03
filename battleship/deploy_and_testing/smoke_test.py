@@ -1,8 +1,11 @@
 from web3.logs import DISCARD
 
 from battleship.deploy_and_testing.utils.board import (
+    FLEET_CELL_COUNT,
+    ShipPlacement,
     build_test_board,
     cell_label,
+    first_miss_cells,
     has_ship,
     merkle_proof,
     short_hex,
@@ -17,8 +20,28 @@ from rps_backend.utils.chain import connect_web3
 from rps_backend.utils.wallets import load_wallet
 
 
-PLAYER1_SHIPS = (0, 6, 12)
-PLAYER2_SHIPS = (1, 7, 13)
+# Ship order must match the contract: length 5, length 4, length 3, length 3, length 2.
+PLAYER1_PLACEMENTS = (
+    ShipPlacement(start_cell=0, horizontal=True),   # A1-E1
+    ShipPlacement(start_cell=20, horizontal=True),  # A3-D3
+    ShipPlacement(start_cell=40, horizontal=True),  # A5-C5
+    ShipPlacement(start_cell=44, horizontal=True),  # E5-G5
+    ShipPlacement(start_cell=60, horizontal=True),  # A7-B7
+)
+PLAYER2_PLACEMENTS = (
+    ShipPlacement(start_cell=10, horizontal=True),  # A2-E2
+    ShipPlacement(start_cell=30, horizontal=True),  # A4-D4
+    ShipPlacement(start_cell=50, horizontal=True),  # A6-C6
+    ShipPlacement(start_cell=54, horizontal=True),  # E6-G6
+    ShipPlacement(start_cell=70, horizontal=True),  # A8-B8
+)
+
+
+def placement_text(placements: tuple[ShipPlacement, ...]) -> str:
+    return ", ".join(
+        f"{cell_label(placement.start_cell)}:{'H' if placement.horizontal else 'V'}"
+        for placement in placements
+    )
 
 
 def send(w3, contract, wallet, function_call, label: str):
@@ -111,21 +134,27 @@ def main() -> None:
         game_id=game_id,
         player_address=player1.address,
         contract_address=contract.address,
-        ship_cells=PLAYER1_SHIPS,
+        placements=PLAYER1_PLACEMENTS,
         namespace="player1",
     )
     board2 = build_test_board(
         game_id=game_id,
         player_address=player2.address,
         contract_address=contract.address,
-        ship_cells=PLAYER2_SHIPS,
+        placements=PLAYER2_PLACEMENTS,
         namespace="player2",
     )
 
+    player2_miss_cells = first_miss_cells(board1, FLEET_CELL_COUNT - 1)
+
     print("\nTest boards:")
+    print("  player1 placements:", placement_text(board1.placements))
     print("  player1 ships:", ", ".join(cell_label(cell) for cell in board1.ship_cells))
+    print("  player1 master salt:", short_hex(board1.master_salt))
     print("  player1 root:", short_hex(board1.root))
+    print("  player2 placements:", placement_text(board2.placements))
     print("  player2 ships:", ", ".join(cell_label(cell) for cell in board2.ship_cells))
+    print("  player2 master salt:", short_hex(board2.master_salt))
     print("  player2 root:", short_hex(board2.root))
 
     send(w3, contract, player1, contract.functions.createGame(), "createGame")
@@ -145,76 +174,41 @@ def main() -> None:
         "commitBoard player2",
     )
 
-    attack_and_reveal(
-        w3=w3,
-        contract=contract,
-        attacker_wallet=player1,
-        defender_wallet=player2,
-        defender_board=board2,
-        game_id=game_id,
-        cell=1,
-    )
-    attack_and_reveal(
-        w3=w3,
-        contract=contract,
-        attacker_wallet=player2,
-        defender_wallet=player1,
-        defender_board=board1,
-        game_id=game_id,
-        cell=4,
-    )
-    attack_and_reveal(
-        w3=w3,
-        contract=contract,
-        attacker_wallet=player1,
-        defender_wallet=player2,
-        defender_board=board2,
-        game_id=game_id,
-        cell=0,
-    )
-    attack_and_reveal(
-        w3=w3,
-        contract=contract,
-        attacker_wallet=player2,
-        defender_wallet=player1,
-        defender_board=board1,
-        game_id=game_id,
-        cell=0,
-    )
-    attack_and_reveal(
-        w3=w3,
-        contract=contract,
-        attacker_wallet=player1,
-        defender_wallet=player2,
-        defender_board=board2,
-        game_id=game_id,
-        cell=7,
-    )
-    attack_and_reveal(
-        w3=w3,
-        contract=contract,
-        attacker_wallet=player2,
-        defender_wallet=player1,
-        defender_board=board1,
-        game_id=game_id,
-        cell=6,
-    )
-    attack_and_reveal(
-        w3=w3,
-        contract=contract,
-        attacker_wallet=player1,
-        defender_wallet=player2,
-        defender_board=board2,
-        game_id=game_id,
-        cell=13,
-    )
+    for attack_index, player1_target in enumerate(board2.ship_cells):
+        attack_and_reveal(
+            w3=w3,
+            contract=contract,
+            attacker_wallet=player1,
+            defender_wallet=player2,
+            defender_board=board2,
+            game_id=game_id,
+            cell=player1_target,
+        )
+
+        if attack_index == len(board2.ship_cells) - 1:
+            break
+
+        attack_and_reveal(
+            w3=w3,
+            contract=contract,
+            attacker_wallet=player2,
+            defender_wallet=player1,
+            defender_board=board1,
+            game_id=game_id,
+            cell=player2_miss_cells[attack_index],
+        )
 
     print("\nPlayer 1 audits their own board to confirm the win.")
     send(
         w3,
         contract,
         player1,
-        contract.functions.revealFinalBoard(game_id, board1.ship_mask, board1.salts),
+        contract.functions.revealFinalBoard(
+            game_id,
+            board1.master_salt,
+            board1.ship_start_cells,
+            board1.ship_horizontal,
+        ),
         "revealFinalBoard",
     )
 
@@ -230,8 +224,10 @@ def main() -> None:
     if game[2].lower() != player1.address.lower():
         raise RuntimeError("Smoke test expected player1 to win.")
 
-    if int(hit_masks[2]) != 2 or int(hit_masks[3]) != 3:
-        raise RuntimeError("Smoke test hit counts are not the expected 2 / 3.")
+    if int(hit_masks[2]) != 0 or int(hit_masks[3]) != FLEET_CELL_COUNT:
+        raise RuntimeError(
+            f"Smoke test hit counts are not the expected 0 / {FLEET_CELL_COUNT}."
+        )
 
     print("\nSmoke test passed.")
 

@@ -16,11 +16,11 @@ Run commands from the repository root with `python -m`:
 ./.venv/bin/python -m battleship.deploy_and_testing.diagnose_deployment --tx <deploy_tx_hash>
 ```
 
-`smoke_test` uses deterministic test boards:
+`smoke_test` uses deterministic 10x10 classic Battleship boards:
 
-- player1 ships: A1, B2, C3
-- player2 ships: B1, C2, D3
+- player1 placements: A1:H, A3:H, A5:H, E5:H, A7:H
+- player2 placements: A2:H, A4:H, A6:H, E6:H, A8:H
 
 It creates a game, joins with player2, commits both board roots, plays enough
-turns for player1 to hit all three player2 ships, and audits player1's board to
-confirm the win.
+turns for player1 to hit all 17 player2 ship cells, and audits player1's board
+with `masterSalt + ship placements` to confirm the win.

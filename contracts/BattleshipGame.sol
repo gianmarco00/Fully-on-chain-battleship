@@ -12,10 +12,11 @@ contract BattleshipGame {
         Cancelled
     }
 
-    uint8 public constant BOARD_WIDTH = 5;
-    uint8 public constant BOARD_HEIGHT = 5;
+    uint8 public constant BOARD_WIDTH = 10;
+    uint8 public constant BOARD_HEIGHT = 10;
     uint8 public constant CELL_COUNT = BOARD_WIDTH * BOARD_HEIGHT;
-    uint8 public constant SHIP_COUNT = 3;
+    uint8 public constant SHIP_COUNT = 5;
+    uint8 public constant FLEET_CELL_COUNT = 17;
 
     uint64 public constant SETUP_TIMEOUT = 5 minutes;
     uint64 public constant ATTACK_TIMEOUT = 2 minutes;
@@ -25,7 +26,6 @@ contract BattleshipGame {
     uint8 private constant PLAYER_1 = 1;
     uint8 private constant PLAYER_2 = 2;
 
-    uint32 private constant FULL_BOARD_MASK = uint32((uint256(1) << CELL_COUNT) - 1);
     uint8 private constant MAX_PROOF_LENGTH = 8;
 
     struct Game {
@@ -35,8 +35,8 @@ contract BattleshipGame {
         bytes32 boardRoot1;
         bytes32 boardRoot2;
 
-        uint32 hitMask1;
-        uint32 hitMask2;
+        uint256 hitMask1;
+        uint256 hitMask2;
 
         uint64 actionDeadline;
         uint8 pendingTarget;
@@ -64,7 +64,7 @@ contract BattleshipGame {
         address indexed defender,
         uint8 cell,
         bool hit,
-        uint32 defenderHitMask
+        uint256 defenderHitMask
     );
     event AuditStarted(uint256 indexed gameId, address indexed provisionalWinner);
     event BoardAudited(uint256 indexed gameId, address indexed player, bool valid);
@@ -154,7 +154,7 @@ contract BattleshipGame {
         require(msg.sender == _roleAddress(game, game.currentAttacker), "Not current attacker");
 
         uint8 defender = _opponentRole(game.currentAttacker);
-        uint32 defenderHitMask = _hitMask(game, defender);
+        uint256 defenderHitMask = _hitMask(game, defender);
 
         require(!_maskContains(defenderHitMask, cell), "Cell already hit");
 
@@ -197,7 +197,7 @@ contract BattleshipGame {
 
         require(_verifyProof(leaf, proof, boardRoot), "Bad cell proof");
 
-        uint32 defenderHitMask = _hitMask(game, defender);
+        uint256 defenderHitMask = _hitMask(game, defender);
 
         if (hasShip) {
             require(!_maskContains(defenderHitMask, cell), "Cell already hit");
@@ -208,7 +208,7 @@ contract BattleshipGame {
 
         emit CellRevealed(gameId, msg.sender, cell, hasShip, defenderHitMask);
 
-        if (_hitCount(defenderHitMask) >= SHIP_COUNT) {
+        if (_hitCount(defenderHitMask) >= FLEET_CELL_COUNT) {
             game.provisionalWinner = game.currentAttacker;
             game.phase = Phase.Audit;
             game.actionDeadline = _deadlineFromNow(AUDIT_TIMEOUT);
@@ -224,8 +224,9 @@ contract BattleshipGame {
 
     function revealFinalBoard(
         uint256 gameId,
-        uint32 shipMask,
-        bytes32[] calldata cellSalts
+        bytes32 masterSalt,
+        uint8[SHIP_COUNT] calldata shipStartCells,
+        bool[SHIP_COUNT] calldata shipHorizontal
     )
         external
         gameExists(gameId)
@@ -236,13 +237,13 @@ contract BattleshipGame {
         require(game.phase == Phase.Audit, "Not audit phase");
         require(block.timestamp <= game.actionDeadline, "Audit deadline passed");
         require(msg.sender == _roleAddress(game, game.provisionalWinner), "Not provisional winner");
-        require(cellSalts.length == CELL_COUNT, "Wrong salt count");
 
         bool valid = _isValidFinalBoard(
             gameId,
             msg.sender,
-            shipMask,
-            cellSalts,
+            masterSalt,
+            shipStartCells,
+            shipHorizontal,
             _boardRoot(game, game.provisionalWinner)
         );
 
@@ -329,18 +330,53 @@ contract BattleshipGame {
         );
     }
 
+    function deriveCellSalt(
+        uint256 gameId,
+        address player,
+        uint8 cell,
+        bytes32 masterSalt
+    )
+        public
+        view
+        returns (bytes32)
+    {
+        require(_isValidCell(cell), "Invalid cell");
+        require(masterSalt != bytes32(0), "Empty master salt");
+
+        return keccak256(
+            abi.encodePacked(
+                gameId,
+                player,
+                cell,
+                masterSalt,
+                address(this)
+            )
+        );
+    }
+
     function computeBoardRoot(
         uint256 gameId,
         address player,
-        uint32 shipMask,
-        bytes32[] calldata cellSalts
+        bytes32 masterSalt,
+        uint8[SHIP_COUNT] calldata shipStartCells,
+        bool[SHIP_COUNT] calldata shipHorizontal
     )
         external
         view
         returns (bytes32)
     {
-        require(cellSalts.length == CELL_COUNT, "Wrong salt count");
-        return _computeBoardRoot(gameId, player, shipMask, cellSalts);
+        (bool valid, uint256 shipMask) = _buildFleetMask(
+            shipStartCells,
+            shipHorizontal
+        );
+
+        require(valid, "Invalid fleet");
+
+        return _computeBoardRoot(gameId, player, shipMask, masterSalt);
+    }
+
+    function shipLength(uint8 shipIndex) external pure returns (uint8) {
+        return _shipLength(shipIndex);
     }
 
     function verifyCell(
@@ -406,8 +442,8 @@ contract BattleshipGame {
         view
         gameExists(gameId)
         returns (
-            uint32 hitMask1,
-            uint32 hitMask2,
+            uint256 hitMask1,
+            uint256 hitMask2,
             uint8 hitCount1,
             uint8 hitCount2
         )
@@ -459,36 +495,32 @@ contract BattleshipGame {
     function _isValidFinalBoard(
         uint256 gameId,
         address player,
-        uint32 shipMask,
-        bytes32[] calldata cellSalts,
+        bytes32 masterSalt,
+        uint8[SHIP_COUNT] calldata shipStartCells,
+        bool[SHIP_COUNT] calldata shipHorizontal,
         bytes32 expectedRoot
     )
         internal
         view
         returns (bool)
     {
-        if (shipMask & ~FULL_BOARD_MASK != 0) {
+        if (masterSalt == bytes32(0)) {
             return false;
         }
 
-        if (_hitCount(shipMask) != SHIP_COUNT) {
-            return false;
-        }
+        (bool validFleet, uint256 shipMask) = _buildFleetMask(
+            shipStartCells,
+            shipHorizontal
+        );
 
-        for (uint8 cell = 0; cell < CELL_COUNT; cell += 1) {
-            if (cellSalts[cell] == bytes32(0)) {
-                return false;
-            }
-        }
-
-        return _computeBoardRoot(gameId, player, shipMask, cellSalts) == expectedRoot;
+        return validFleet && _computeBoardRoot(gameId, player, shipMask, masterSalt) == expectedRoot;
     }
 
     function _computeBoardRoot(
         uint256 gameId,
         address player,
-        uint32 shipMask,
-        bytes32[] calldata cellSalts
+        uint256 shipMask,
+        bytes32 masterSalt
     )
         internal
         view
@@ -498,7 +530,8 @@ contract BattleshipGame {
 
         for (uint8 cell = 0; cell < CELL_COUNT; cell += 1) {
             bool hasShip = _maskContains(shipMask, cell);
-            layer[cell] = makeBoardLeaf(gameId, player, cell, hasShip, cellSalts[cell]);
+            bytes32 cellSalt = deriveCellSalt(gameId, player, cell, masterSalt);
+            layer[cell] = makeBoardLeaf(gameId, player, cell, hasShip, cellSalt);
         }
 
         uint256 nodeCount = CELL_COUNT;
@@ -517,6 +550,58 @@ contract BattleshipGame {
         }
 
         return layer[0];
+    }
+
+    function _buildFleetMask(
+        uint8[SHIP_COUNT] calldata shipStartCells,
+        bool[SHIP_COUNT] calldata shipHorizontal
+    )
+        internal
+        pure
+        returns (bool valid, uint256 shipMask)
+    {
+        uint8 occupiedCells = 0;
+
+        for (uint8 shipIndex = 0; shipIndex < SHIP_COUNT; shipIndex += 1) {
+            uint8 length = _shipLength(shipIndex);
+            uint8 startCell = shipStartCells[shipIndex];
+
+            if (!_isValidCell(startCell)) {
+                return (false, 0);
+            }
+
+            uint8 startColumn = startCell % BOARD_WIDTH;
+            uint8 startRow = startCell / BOARD_WIDTH;
+            uint8 step;
+
+            if (shipHorizontal[shipIndex]) {
+                if (startColumn + length > BOARD_WIDTH) {
+                    return (false, 0);
+                }
+
+                step = 1;
+            } else {
+                if (startRow + length > BOARD_HEIGHT) {
+                    return (false, 0);
+                }
+
+                step = BOARD_WIDTH;
+            }
+
+            for (uint8 offset = 0; offset < length; offset += 1) {
+                uint8 cell = startCell + offset * step;
+                uint256 bit = uint256(1) << cell;
+
+                if (shipMask & bit != 0) {
+                    return (false, 0);
+                }
+
+                shipMask |= bit;
+                occupiedCells += 1;
+            }
+        }
+
+        return (occupiedCells == FLEET_CELL_COUNT, shipMask);
     }
 
     function _verifyProof(
@@ -543,7 +628,16 @@ contract BattleshipGame {
             : keccak256(abi.encodePacked(right, left));
     }
 
-    function _hitCount(uint32 mask) internal pure returns (uint8 count) {
+    function _shipLength(uint8 shipIndex) internal pure returns (uint8) {
+        if (shipIndex == 0) return 5;
+        if (shipIndex == 1) return 4;
+        if (shipIndex == 2 || shipIndex == 3) return 3;
+        if (shipIndex == 4) return 2;
+
+        revert("Invalid ship");
+    }
+
+    function _hitCount(uint256 mask) internal pure returns (uint8 count) {
         while (mask != 0) {
             mask &= mask - 1;
             count += 1;
@@ -554,12 +648,12 @@ contract BattleshipGame {
         return cell < CELL_COUNT;
     }
 
-    function _maskContains(uint32 mask, uint8 cell) internal pure returns (bool) {
-        return (mask & (uint32(1) << cell)) != 0;
+    function _maskContains(uint256 mask, uint8 cell) internal pure returns (bool) {
+        return (mask & (uint256(1) << cell)) != 0;
     }
 
-    function _setMaskBit(uint32 mask, uint8 cell) internal pure returns (uint32) {
-        return mask | (uint32(1) << cell);
+    function _setMaskBit(uint256 mask, uint8 cell) internal pure returns (uint256) {
+        return mask | (uint256(1) << cell);
     }
 
     function _deadlineFromNow(uint64 duration) internal view returns (uint64) {
@@ -580,14 +674,14 @@ contract BattleshipGame {
         revert("Invalid role");
     }
 
-    function _hitMask(Game storage game, uint8 role) internal view returns (uint32) {
+    function _hitMask(Game storage game, uint8 role) internal view returns (uint256) {
         if (role == PLAYER_1) return game.hitMask1;
         if (role == PLAYER_2) return game.hitMask2;
 
         revert("Invalid role");
     }
 
-    function _setHitMask(Game storage game, uint8 role, uint32 hitMask) internal {
+    function _setHitMask(Game storage game, uint8 role, uint256 hitMask) internal {
         if (role == PLAYER_1) {
             game.hitMask1 = hitMask;
             return;
