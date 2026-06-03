@@ -189,6 +189,42 @@ def deterministic_master_salt(
     )
 
 
+def deterministic_first_move_secret(
+    namespace: str,
+    game_id: int,
+    player_address: str,
+) -> bytes:
+    return Web3.keccak(
+        text=(
+            "battleship-test-first-move:"
+            f"{namespace}:"
+            f"{game_id}:"
+            f"{Web3.to_checksum_address(player_address)}"
+        )
+    )
+
+
+def make_first_move_commit(
+    *,
+    game_id: int,
+    player_address: str,
+    random_secret: bytes,
+    contract_address: str,
+) -> bytes:
+    if int.from_bytes(random_secret, "big") == 0:
+        raise ValueError("Random secret cannot be zero.")
+
+    return Web3.solidity_keccak(
+        ["uint256", "address", "bytes32", "address"],
+        [
+            game_id,
+            Web3.to_checksum_address(player_address),
+            random_secret,
+            Web3.to_checksum_address(contract_address),
+        ],
+    )
+
+
 def derive_cell_salt(
     *,
     game_id: int,

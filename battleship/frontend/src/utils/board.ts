@@ -39,6 +39,8 @@ export type BoardSecret = {
   shipCells: number[];
   shipMask: string;
   masterSalt?: Hex;
+  firstMoveSecret?: Hex;
+  firstMoveCommit?: Hex;
   shipStartCells?: number[];
   shipHorizontal?: boolean[];
   salts: Hex[];
@@ -180,8 +182,16 @@ export function generateSalt(): Hex {
     throw new Error("Browser crypto is not available.");
   }
 
-  const bytes = globalThis.crypto.getRandomValues(new Uint8Array(32));
-  return bytesToHex(bytes);
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const bytes = globalThis.crypto.getRandomValues(new Uint8Array(32));
+    const salt = bytesToHex(bytes);
+
+    if (BigInt(salt) !== 0n) {
+      return salt;
+    }
+  }
+
+  throw new Error("Browser crypto produced an empty secret.");
 }
 
 export function deriveCellSalt({
@@ -205,6 +215,30 @@ export function deriveCellSalt({
         asAddress(playerAddress),
         validateCell(cell),
         masterSalt,
+        asAddress(contractAddress),
+      ]
+    )
+  );
+}
+
+export function makeFirstMoveCommit({
+  gameId,
+  playerAddress,
+  firstMoveSecret,
+  contractAddress = BATTLESHIP_CONTRACT_ADDRESS,
+}: {
+  gameId: bigint;
+  playerAddress: string;
+  firstMoveSecret: Hex;
+  contractAddress?: string;
+}): Hex {
+  return keccak256(
+    encodePacked(
+      ["uint256", "address", "bytes32", "address"],
+      [
+        gameId,
+        asAddress(playerAddress),
+        firstMoveSecret,
         asAddress(contractAddress),
       ]
     )
@@ -325,6 +359,12 @@ export function buildBoardSecret({
   const shipCells = shipCellsFromPlacements(orderedPlacements);
   const shipMask = shipMaskFromCells(shipCells);
   const masterSalt = generateSalt();
+  const firstMoveSecret = generateSalt();
+  const firstMoveCommit = makeFirstMoveCommit({
+    gameId,
+    playerAddress,
+    firstMoveSecret,
+  });
   const salts = Array.from({ length: CELL_COUNT }, (_, cell) =>
     deriveCellSalt({
       gameId,
@@ -350,6 +390,8 @@ export function buildBoardSecret({
     shipCells: [...shipCells],
     shipMask,
     masterSalt,
+    firstMoveSecret,
+    firstMoveCommit,
     shipStartCells: orderedPlacements.map((placement) => placement.startCell),
     shipHorizontal: orderedPlacements.map((placement) => placement.horizontal),
     salts,
@@ -364,6 +406,7 @@ export function saveBoardSecret(secret: BoardSecret): void {
     playerAddress: secret.playerAddress,
     shipCount: secret.shipStartCells?.length ?? 0,
     shipCellCount: secret.shipCells.length,
+    firstMoveCommit: secret.firstMoveCommit,
     root: secret.root,
   });
 

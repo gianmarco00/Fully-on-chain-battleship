@@ -5,8 +5,10 @@ from battleship.deploy_and_testing.utils.board import (
     ShipPlacement,
     build_test_board,
     cell_label,
+    deterministic_first_move_secret,
     first_miss_cells,
     has_ship,
+    make_first_move_commit,
     merkle_proof,
     short_hex,
 )
@@ -36,6 +38,9 @@ PLAYER2_PLACEMENTS = (
     ShipPlacement(start_cell=70, horizontal=True),  # A8-B8
 )
 
+PHASE_ATTACK = 3
+PHASE_AUDIT = 5
+
 
 def placement_text(placements: tuple[ShipPlacement, ...]) -> str:
     return ", ".join(
@@ -57,6 +62,8 @@ def send(w3, contract, wallet, function_call, label: str):
         contract.events.GameCreated(),
         contract.events.GameJoined(),
         contract.events.BoardCommitted(),
+        contract.events.RandomnessRevealed(),
+        contract.events.FirstAttackerChosen(),
         contract.events.CellAttacked(),
         contract.events.CellRevealed(),
         contract.events.AuditStarted(),
@@ -144,18 +151,44 @@ def main() -> None:
         placements=PLAYER2_PLACEMENTS,
         namespace="player2",
     )
+    player1_random_secret = deterministic_first_move_secret(
+        "player1",
+        game_id,
+        player1.address,
+    )
+    player2_random_secret = deterministic_first_move_secret(
+        "player2",
+        game_id,
+        player2.address,
+    )
+    player1_random_commit = make_first_move_commit(
+        game_id=game_id,
+        player_address=player1.address,
+        random_secret=player1_random_secret,
+        contract_address=contract.address,
+    )
+    player2_random_commit = make_first_move_commit(
+        game_id=game_id,
+        player_address=player2.address,
+        random_secret=player2_random_secret,
+        contract_address=contract.address,
+    )
 
-    player2_miss_cells = first_miss_cells(board1, FLEET_CELL_COUNT - 1)
+    player2_miss_cells = first_miss_cells(board1, FLEET_CELL_COUNT)
 
     print("\nTest boards:")
     print("  player1 placements:", placement_text(board1.placements))
     print("  player1 ships:", ", ".join(cell_label(cell) for cell in board1.ship_cells))
     print("  player1 master salt:", short_hex(board1.master_salt))
     print("  player1 root:", short_hex(board1.root))
+    print("  player1 first move secret:", short_hex(player1_random_secret))
+    print("  player1 first move commit:", short_hex(player1_random_commit))
     print("  player2 placements:", placement_text(board2.placements))
     print("  player2 ships:", ", ".join(cell_label(cell) for cell in board2.ship_cells))
     print("  player2 master salt:", short_hex(board2.master_salt))
     print("  player2 root:", short_hex(board2.root))
+    print("  player2 first move secret:", short_hex(player2_random_secret))
+    print("  player2 first move commit:", short_hex(player2_random_commit))
 
     send(w3, contract, player1, contract.functions.createGame(), "createGame")
     send(w3, contract, player2, contract.functions.joinGame(game_id), "joinGame")
@@ -163,40 +196,85 @@ def main() -> None:
         w3,
         contract,
         player1,
-        contract.functions.commitBoard(game_id, board1.root),
+        contract.functions.commitBoard(game_id, board1.root, player1_random_commit),
         "commitBoard player1",
     )
     send(
         w3,
         contract,
         player2,
-        contract.functions.commitBoard(game_id, board2.root),
+        contract.functions.commitBoard(game_id, board2.root, player2_random_commit),
         "commitBoard player2",
     )
 
-    for attack_index, player1_target in enumerate(board2.ship_cells):
-        attack_and_reveal(
-            w3=w3,
-            contract=contract,
-            attacker_wallet=player1,
-            defender_wallet=player2,
-            defender_board=board2,
-            game_id=game_id,
-            cell=player1_target,
-        )
+    print("\nPlayers reveal first-move randomness.")
+    send(
+        w3,
+        contract,
+        player1,
+        contract.functions.revealRandomness(game_id, player1_random_secret),
+        "revealRandomness player1",
+    )
+    send(
+        w3,
+        contract,
+        player2,
+        contract.functions.revealRandomness(game_id, player2_random_secret),
+        "revealRandomness player2",
+    )
 
-        if attack_index == len(board2.ship_cells) - 1:
+    game = contract.functions.getGame(game_id).call()
+    print("  first attacker:", game[4])
+
+    player1_hit_index = 0
+    player2_miss_index = 0
+
+    while True:
+        game = contract.functions.getGame(game_id).call()
+        phase = int(game[3])
+
+        if phase == PHASE_AUDIT:
             break
 
-        attack_and_reveal(
-            w3=w3,
-            contract=contract,
-            attacker_wallet=player2,
-            defender_wallet=player1,
-            defender_board=board1,
-            game_id=game_id,
-            cell=player2_miss_cells[attack_index],
-        )
+        if phase != PHASE_ATTACK:
+            raise RuntimeError(f"Expected attack phase, got phase {phase}.")
+
+        current_attacker = str(game[4]).lower()
+
+        if current_attacker == player1.address.lower():
+            if player1_hit_index >= len(board2.ship_cells):
+                raise RuntimeError("Player 1 ran out of ship cells to attack.")
+
+            target_cell = board2.ship_cells[player1_hit_index]
+            player1_hit_index += 1
+
+            attack_and_reveal(
+                w3=w3,
+                contract=contract,
+                attacker_wallet=player1,
+                defender_wallet=player2,
+                defender_board=board2,
+                game_id=game_id,
+                cell=target_cell,
+            )
+        elif current_attacker == player2.address.lower():
+            if player2_miss_index >= len(player2_miss_cells):
+                raise RuntimeError("Player 2 ran out of miss cells to attack.")
+
+            target_cell = player2_miss_cells[player2_miss_index]
+            player2_miss_index += 1
+
+            attack_and_reveal(
+                w3=w3,
+                contract=contract,
+                attacker_wallet=player2,
+                defender_wallet=player1,
+                defender_board=board1,
+                game_id=game_id,
+                cell=target_cell,
+            )
+        else:
+            raise RuntimeError(f"Unexpected current attacker: {game[4]}")
 
     print("\nPlayer 1 audits their own board to confirm the win.")
     send(

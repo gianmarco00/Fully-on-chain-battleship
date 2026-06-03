@@ -9,6 +9,7 @@ import {
   readCellRevealedLogsFromReceipt,
   revealCell,
   revealFinalBoard,
+  revealRandomness,
   waitForTransaction,
   watchGameEvents,
 } from "../utils/contract";
@@ -71,11 +72,13 @@ const POLL_MS = 1000;
 const LOBBY_POLL_MS = 300;
 const PHASE_WAITING = 0;
 const PHASE_BOARD_SETUP = 1;
-const PHASE_ATTACK = 2;
-const PHASE_CELL_REVEAL = 3;
-const PHASE_AUDIT = 4;
-const PHASE_FINISHED = 5;
+const PHASE_RANDOM_REVEAL = 2;
+const PHASE_ATTACK = 3;
+const PHASE_CELL_REVEAL = 4;
+const PHASE_AUDIT = 5;
+const PHASE_FINISHED = 6;
 const GAME_STARTING_DELAY_MS = 2000;
+const FIRST_ATTACK_ANNOUNCEMENT_MS = 2000;
 const BOARD_CELLS = Array.from({ length: CELL_COUNT }, (_, cell) => cell);
 const TIMER_TICK_MS = 1000;
 
@@ -188,6 +191,11 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
   const [savedShipCells, setSavedShipCells] = useState<number[]>(() =>
     playerAddress ? (loadBoardSecret(gameId, playerAddress)?.shipCells ?? []) : []
   );
+  const [randomRevealMessage, setRandomRevealMessage] = useState("");
+  const [randomRevealError, setRandomRevealError] = useState("");
+  const [firstAttackAnnouncementKey, setFirstAttackAnnouncementKey] = useState<
+    string | null
+  >(null);
   const [selectedAttackCell, setSelectedAttackCell] = useState<number | null>(null);
   const [attackingCell, setAttackingCell] = useState<number | null>(null);
   const [attackMessage, setAttackMessage] = useState("");
@@ -204,6 +212,9 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
   const latestPhase = useRef<number | null>(null);
   const autoSetupTimeoutClaimKeys = useRef<Set<string>>(new Set());
   const autoPhaseTimeoutClaimKeys = useRef<Set<string>>(new Set());
+  const autoRandomRevealKeys = useRef<Set<string>>(new Set());
+  const firstAttackAnnouncementSeenKeys = useRef<Set<string>>(new Set());
+  const firstAttackAnnouncementTimeoutId = useRef<number | null>(null);
   const autoRevealKeys = useRef<Set<string>>(new Set());
   const autoAuditKeys = useRef<Set<string>>(new Set());
 
@@ -359,6 +370,7 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
       : currentRole === "player2"
         ? Boolean(gameState?.player1BoardCommitted)
         : false;
+  const randomRevealPhaseVisible = gameState?.phase === PHASE_RANDOM_REVEAL;
   const attackPhaseVisible = gameState?.phase === PHASE_ATTACK;
   const cellRevealPhaseVisible = gameState?.phase === PHASE_CELL_REVEAL;
   const auditPhaseVisible = gameState?.phase === PHASE_AUDIT;
@@ -386,6 +398,20 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
       : gameState && currentRole === "player2"
         ? gameState.player1
         : null;
+  const firstAttackAnnouncementAttacker = gameState?.currentAttacker ?? "";
+  const firstAttackAnnouncementNoShots = Boolean(
+    gameState &&
+      gameState.hitCount1 === 0 &&
+      gameState.hitCount2 === 0 &&
+      shotResults.length === 0
+  );
+  const firstAttackAnnouncementCurrentKey =
+    attackPhaseVisible && !isZeroAddress(firstAttackAnnouncementAttacker)
+      ? `${gameId.toString()}:${firstAttackAnnouncementAttacker.toLowerCase()}`
+      : null;
+  const firstAttackAnnouncementVisible =
+    firstAttackAnnouncementKey !== null &&
+    firstAttackAnnouncementKey === firstAttackAnnouncementCurrentKey;
   const placedShipCells = placedShips.flatMap((ship) => ship.cells);
   const placedShipCellSet = new Set(placedShipCells);
   const placedShipIds = new Set(placedShips.map((ship) => ship.shipId));
@@ -723,6 +749,178 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
     gameId,
     playerAddress,
   ]);
+
+  useEffect(() => {
+    if (!gameState || !playerAddress || !currentRole || !randomRevealPhaseVisible) {
+      return;
+    }
+
+    const revealerAddress = playerAddress;
+    const actionDeadline = gameState.actionDeadline;
+
+    if (actionDeadline !== 0n && Number(actionDeadline) * 1000 <= Date.now()) {
+      devLog("gameWindow:autoRandomReveal:skipped", {
+        gameId,
+        windowPlayerAddress: revealerAddress,
+        reason: "random reveal deadline already passed",
+        actionDeadline,
+      });
+      return;
+    }
+
+    const revealKey = [
+      gameId.toString(),
+      revealerAddress.toLowerCase(),
+      actionDeadline.toString(),
+    ].join(":");
+
+    if (autoRandomRevealKeys.current.has(revealKey)) return;
+    autoRandomRevealKeys.current.add(revealKey);
+
+    let cancelled = false;
+
+    async function autoRevealRandomness() {
+      devLog("gameWindow:autoRandomReveal:start", {
+        gameId,
+        windowPlayerAddress: revealerAddress,
+        role: currentRole,
+      });
+
+      try {
+        const boardSecret = loadBoardSecret(gameId, revealerAddress);
+
+        if (!boardSecret?.firstMoveSecret) {
+          throw new Error("No local first-move secret found for randomness reveal.");
+        }
+
+        const accounts = await getCurrentAccounts();
+        const activeAccount = accounts[0] ?? null;
+
+        if (!sameAddress(activeAccount, revealerAddress)) {
+          throw new Error("Switch MetaMask to this player to reveal randomness.");
+        }
+
+        setRandomRevealMessage("Revealing first-move randomness...");
+        setRandomRevealError("");
+
+        const txHash = await revealRandomness(
+          gameId,
+          boardSecret.firstMoveSecret,
+          revealerAddress
+        );
+
+        setRandomRevealMessage(
+          "Randomness reveal transaction sent. Waiting for confirmation..."
+        );
+        devLog("gameWindow:autoRandomReveal:txSent", {
+          gameId,
+          windowPlayerAddress: revealerAddress,
+          role: currentRole,
+          txHash,
+          firstMoveCommit: boardSecret.firstMoveCommit,
+        });
+
+        await waitForTransaction(txHash);
+        const refreshedState = await loadGameState(gameId);
+
+        if (cancelled) return;
+
+        setGameState(refreshedState);
+        setRandomRevealMessage("");
+        setRandomRevealError("");
+
+        devLog("gameWindow:autoRandomReveal:registered", {
+          gameId,
+          windowPlayerAddress: revealerAddress,
+          role: currentRole,
+          txHash,
+          nextPhase: refreshedState.phaseName,
+          firstAttacker: refreshedState.currentAttacker,
+        });
+      } catch (error) {
+        if (!cancelled) {
+          setRandomRevealMessage("");
+          setRandomRevealError(
+            error instanceof Error ? error.message : "Randomness reveal failed."
+          );
+        }
+
+        devLog("gameWindow:autoRandomReveal:error", {
+          gameId,
+          windowPlayerAddress: revealerAddress,
+          role: currentRole,
+          error,
+        });
+      }
+    }
+
+    autoRevealRandomness();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    currentRole,
+    gameId,
+    gameState,
+    playerAddress,
+    randomRevealPhaseVisible,
+  ]);
+
+  useEffect(() => {
+    if (
+      !attackPhaseVisible ||
+      !firstAttackAnnouncementCurrentKey ||
+      firstAttackAnnouncementSeenKeys.current.has(firstAttackAnnouncementCurrentKey) ||
+      !firstAttackAnnouncementNoShots
+    ) {
+      return;
+    }
+
+    firstAttackAnnouncementSeenKeys.current.add(firstAttackAnnouncementCurrentKey);
+    setFirstAttackAnnouncementKey(firstAttackAnnouncementCurrentKey);
+
+    if (firstAttackAnnouncementTimeoutId.current !== null) {
+      window.clearTimeout(firstAttackAnnouncementTimeoutId.current);
+      firstAttackAnnouncementTimeoutId.current = null;
+    }
+
+    devLog("gameWindow:firstAttackAnnouncement:visible", {
+      gameId,
+      windowPlayerAddress: playerAddress,
+      firstAttacker: firstAttackAnnouncementAttacker,
+      key: firstAttackAnnouncementCurrentKey,
+    });
+
+    firstAttackAnnouncementTimeoutId.current = window.setTimeout(() => {
+      setFirstAttackAnnouncementKey((currentKey) =>
+        currentKey === firstAttackAnnouncementCurrentKey ? null : currentKey
+      );
+      firstAttackAnnouncementTimeoutId.current = null;
+
+      devLog("gameWindow:firstAttackAnnouncement:hidden", {
+        gameId,
+        windowPlayerAddress: playerAddress,
+        firstAttacker: firstAttackAnnouncementAttacker,
+        key: firstAttackAnnouncementCurrentKey,
+      });
+    }, FIRST_ATTACK_ANNOUNCEMENT_MS);
+  }, [
+    attackPhaseVisible,
+    firstAttackAnnouncementAttacker,
+    firstAttackAnnouncementCurrentKey,
+    firstAttackAnnouncementNoShots,
+    gameId,
+    playerAddress,
+  ]);
+
+  useEffect(() => {
+    return () => {
+      if (firstAttackAnnouncementTimeoutId.current !== null) {
+        window.clearTimeout(firstAttackAnnouncementTimeoutId.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     if (
@@ -1108,6 +1306,10 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
       });
       boardRoot = boardSecret.root;
 
+      if (!boardSecret.firstMoveCommit) {
+        throw new Error("First-move randomness commitment was not created.");
+      }
+
       saveBoardSecret(boardSecret);
       setSavedShipCells(boardSecret.shipCells);
       devLog("gameWindow:boardCommit:prepared", {
@@ -1116,16 +1318,23 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
         role,
         shipCount: placements.length,
         shipCellCount: boardSecret.shipCells.length,
+        firstMoveCommit: boardSecret.firstMoveCommit,
         boardRoot: boardSecret.root,
       });
 
-      const txHash = await commitBoard(gameId, boardSecret.root, playerAddress);
+      const txHash = await commitBoard(
+        gameId,
+        boardSecret.root,
+        boardSecret.firstMoveCommit,
+        playerAddress
+      );
       setBoardCommitMessage("Board transaction sent. Waiting for confirmation...");
       devLog("gameWindow:boardCommit:txSent", {
         gameId,
         windowPlayerAddress: playerAddress,
         role,
         txHash,
+        firstMoveCommit: boardSecret.firstMoveCommit,
         boardRoot: boardSecret.root,
       });
 
@@ -1413,6 +1622,31 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
           </h1>
           {auditMessage && <div className="success">{auditMessage}</div>}
           {auditError && <div className="warning">{auditError}</div>}
+        </section>
+      </main>
+    );
+  }
+
+  if (randomRevealPhaseVisible) {
+    return (
+      <main className="page game-window-page">
+        <section className="card game-window-card game-starting-card">
+          <DeadlineTimer gameState={gameState} nowMs={nowMs} />
+          <h1>Choosing first player...</h1>
+          {randomRevealMessage && <div className="success">{randomRevealMessage}</div>}
+          {randomRevealError && <div className="warning">{randomRevealError}</div>}
+        </section>
+      </main>
+    );
+  }
+
+  if (firstAttackAnnouncementVisible) {
+    return (
+      <main className="page game-window-page">
+        <section className="card game-window-card game-starting-card">
+          <h1>
+            {currentPlayerIsAttacker ? "You move first" : "Prepare to be attacked"}
+          </h1>
         </section>
       </main>
     );

@@ -63,6 +63,12 @@
         "internalType": "bytes32",
         "name": "boardRoot",
         "type": "bytes32"
+      },
+      {
+        "indexed": false,
+        "internalType": "bytes32",
+        "name": "randomCommit",
+        "type": "bytes32"
       }
     ],
     "name": "BoardCommitted",
@@ -144,6 +150,31 @@
         "internalType": "uint256",
         "name": "gameId",
         "type": "uint256"
+      },
+      {
+        "indexed": true,
+        "internalType": "address",
+        "name": "attacker",
+        "type": "address"
+      },
+      {
+        "indexed": false,
+        "internalType": "bytes32",
+        "name": "randomSeed",
+        "type": "bytes32"
+      }
+    ],
+    "name": "FirstAttackerChosen",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "uint256",
+        "name": "gameId",
+        "type": "uint256"
       }
     ],
     "name": "GameCancelled",
@@ -204,6 +235,25 @@
       }
     ],
     "name": "GameJoined",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "uint256",
+        "name": "gameId",
+        "type": "uint256"
+      },
+      {
+        "indexed": true,
+        "internalType": "address",
+        "name": "player",
+        "type": "address"
+      }
+    ],
+    "name": "RandomnessRevealed",
     "type": "event"
   },
   {
@@ -305,6 +355,19 @@
   },
   {
     "inputs": [],
+    "name": "RANDOM_REVEAL_TIMEOUT",
+    "outputs": [
+      {
+        "internalType": "uint64",
+        "name": "",
+        "type": "uint64"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
     "name": "REVEAL_TIMEOUT",
     "outputs": [
       {
@@ -396,6 +459,11 @@
       {
         "internalType": "bytes32",
         "name": "boardRoot",
+        "type": "bytes32"
+      },
+      {
+        "internalType": "bytes32",
+        "name": "randomCommit",
         "type": "bytes32"
       }
     ],
@@ -610,6 +678,40 @@
         "type": "uint256"
       }
     ],
+    "name": "getRandomness",
+    "outputs": [
+      {
+        "internalType": "bytes32",
+        "name": "randomCommit1",
+        "type": "bytes32"
+      },
+      {
+        "internalType": "bytes32",
+        "name": "randomCommit2",
+        "type": "bytes32"
+      },
+      {
+        "internalType": "bool",
+        "name": "player1Revealed",
+        "type": "bool"
+      },
+      {
+        "internalType": "bool",
+        "name": "player2Revealed",
+        "type": "bool"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "gameId",
+        "type": "uint256"
+      }
+    ],
     "name": "joinGame",
     "outputs": [],
     "stateMutability": "nonpayable",
@@ -644,6 +746,35 @@
       }
     ],
     "name": "makeBoardLeaf",
+    "outputs": [
+      {
+        "internalType": "bytes32",
+        "name": "",
+        "type": "bytes32"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "gameId",
+        "type": "uint256"
+      },
+      {
+        "internalType": "address",
+        "name": "player",
+        "type": "address"
+      },
+      {
+        "internalType": "bytes32",
+        "name": "randomSecret",
+        "type": "bytes32"
+      }
+    ],
+    "name": "makeFirstMoveCommit",
     "outputs": [
       {
         "internalType": "bytes32",
@@ -724,6 +855,24 @@
       }
     ],
     "name": "revealFinalBoard",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "gameId",
+        "type": "uint256"
+      },
+      {
+        "internalType": "bytes32",
+        "name": "randomSecret",
+        "type": "bytes32"
+      }
+    ],
+    "name": "revealRandomness",
     "outputs": [],
     "stateMutability": "nonpayable",
     "type": "function"

@@ -26,6 +26,8 @@ const FAST_POLLING_INTERVAL_MS = 500;
 export type BattleshipGameEventName =
   | "GameJoined"
   | "BoardCommitted"
+  | "RandomnessRevealed"
+  | "FirstAttackerChosen"
   | "CellAttacked"
   | "CellRevealed"
   | "AuditStarted"
@@ -52,6 +54,8 @@ export type CellRevealedLog = {
 const GAME_EVENTS_TO_WATCH: readonly BattleshipGameEventName[] = [
   "GameJoined",
   "BoardCommitted",
+  "RandomnessRevealed",
+  "FirstAttackerChosen",
   "CellAttacked",
   "CellRevealed",
   "AuditStarted",
@@ -358,11 +362,13 @@ export async function joinGame(
 export async function commitBoard(
   gameId: bigint,
   boardRoot: Hash,
+  firstMoveCommit: Hex,
   senderAddress: string
 ): Promise<Hash> {
   devLog("contract:commitBoard:start", {
     gameId,
     boardRoot,
+    firstMoveCommit,
     senderAddress,
     contract: BATTLESHIP_CONTRACT_ADDRESS,
   });
@@ -372,12 +378,13 @@ export async function commitBoard(
     const data = encodeFunctionData({
       abi: BATTLESHIP_ABI,
       functionName: "commitBoard",
-      args: [gameId, boardRoot],
+      args: [gameId, boardRoot, firstMoveCommit],
     });
 
     devLog("contract:commitBoard:sendTransaction:request", {
       gameId,
       boardRoot,
+      firstMoveCommit,
       senderAddress,
       contract: BATTLESHIP_CONTRACT_ADDRESS,
       functionName: "commitBoard",
@@ -399,6 +406,7 @@ export async function commitBoard(
     devLog("contract:commitBoard:txSent", {
       gameId,
       boardRoot,
+      firstMoveCommit,
       senderAddress,
       hash,
     });
@@ -407,6 +415,62 @@ export async function commitBoard(
     devLog("contract:commitBoard:error", {
       gameId,
       boardRoot,
+      firstMoveCommit,
+      senderAddress,
+      error,
+    });
+    throw error;
+  }
+}
+
+export async function revealRandomness(
+  gameId: bigint,
+  firstMoveSecret: Hex,
+  senderAddress: string
+): Promise<Hash> {
+  devLog("contract:revealRandomness:start", {
+    gameId,
+    senderAddress,
+    contract: BATTLESHIP_CONTRACT_ADDRESS,
+  });
+
+  try {
+    const provider = getEthereumProvider();
+    const data = encodeFunctionData({
+      abi: BATTLESHIP_ABI,
+      functionName: "revealRandomness",
+      args: [gameId, firstMoveSecret],
+    });
+
+    devLog("contract:revealRandomness:sendTransaction:request", {
+      gameId,
+      senderAddress,
+      contract: BATTLESHIP_CONTRACT_ADDRESS,
+      functionName: "revealRandomness",
+      gas: DEFAULT_WRITE_GAS_LIMIT,
+    });
+
+    const hash = (await provider.request({
+      method: "eth_sendTransaction",
+      params: [
+        {
+          from: asAddress(senderAddress),
+          to: asAddress(BATTLESHIP_CONTRACT_ADDRESS),
+          data,
+          gas: numberToHex(DEFAULT_WRITE_GAS_LIMIT),
+        },
+      ],
+    })) as Hash;
+
+    devLog("contract:revealRandomness:txSent", {
+      gameId,
+      senderAddress,
+      hash,
+    });
+    return hash;
+  } catch (error) {
+    devLog("contract:revealRandomness:error", {
+      gameId,
       senderAddress,
       error,
     });

@@ -6,11 +6,12 @@ const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
 export const PHASE_NAMES: Record<number, string> = {
   0: "WaitingForPlayer",
   1: "BoardSetup",
-  2: "Attack",
-  3: "CellReveal",
-  4: "Audit",
-  5: "Finished",
-  6: "Cancelled",
+  2: "RandomReveal",
+  3: "Attack",
+  4: "CellReveal",
+  5: "Audit",
+  6: "Finished",
+  7: "Cancelled",
 };
 
 const EMPTY_BYTES32 =

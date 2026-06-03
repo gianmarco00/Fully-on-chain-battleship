@@ -5,6 +5,7 @@ contract BattleshipGame {
     enum Phase {
         WaitingForPlayer,
         BoardSetup,
+        RandomReveal,
         Attack,
         CellReveal,
         Audit,
@@ -19,6 +20,7 @@ contract BattleshipGame {
     uint8 public constant FLEET_CELL_COUNT = 17;
 
     uint64 public constant SETUP_TIMEOUT = 5 minutes;
+    uint64 public constant RANDOM_REVEAL_TIMEOUT = 2 minutes;
     uint64 public constant ATTACK_TIMEOUT = 2 minutes;
     uint64 public constant REVEAL_TIMEOUT = 2 minutes;
     uint64 public constant AUDIT_TIMEOUT = 5 minutes;
@@ -34,6 +36,11 @@ contract BattleshipGame {
 
         bytes32 boardRoot1;
         bytes32 boardRoot2;
+
+        bytes32 randomCommit1;
+        bytes32 randomCommit2;
+        bytes32 randomSecret1;
+        bytes32 randomSecret2;
 
         uint256 hitMask1;
         uint256 hitMask2;
@@ -52,7 +59,18 @@ contract BattleshipGame {
 
     event GameCreated(uint256 indexed gameId, address indexed player1);
     event GameJoined(uint256 indexed gameId, address indexed player2);
-    event BoardCommitted(uint256 indexed gameId, address indexed player, bytes32 boardRoot);
+    event BoardCommitted(
+        uint256 indexed gameId,
+        address indexed player,
+        bytes32 boardRoot,
+        bytes32 randomCommit
+    );
+    event RandomnessRevealed(uint256 indexed gameId, address indexed player);
+    event FirstAttackerChosen(
+        uint256 indexed gameId,
+        address indexed attacker,
+        bytes32 randomSeed
+    );
     event CellAttacked(
         uint256 indexed gameId,
         address indexed attacker,
@@ -113,7 +131,11 @@ contract BattleshipGame {
         emit GameJoined(gameId, msg.sender);
     }
 
-    function commitBoard(uint256 gameId, bytes32 boardRoot)
+    function commitBoard(
+        uint256 gameId,
+        bytes32 boardRoot,
+        bytes32 randomCommit
+    )
         external
         gameExists(gameId)
         onlyPlayer(gameId)
@@ -123,21 +145,53 @@ contract BattleshipGame {
         require(game.phase == Phase.BoardSetup, "Not board setup phase");
         require(block.timestamp <= game.actionDeadline, "Setup deadline passed");
         require(boardRoot != bytes32(0), "Empty board root");
+        require(randomCommit != bytes32(0), "Empty random commit");
 
         if (msg.sender == game.player1) {
             require(game.boardRoot1 == bytes32(0), "Player 1 already committed board");
             game.boardRoot1 = boardRoot;
+            game.randomCommit1 = randomCommit;
         } else {
             require(game.boardRoot2 == bytes32(0), "Player 2 already committed board");
             game.boardRoot2 = boardRoot;
+            game.randomCommit2 = randomCommit;
         }
 
-        emit BoardCommitted(gameId, msg.sender, boardRoot);
+        emit BoardCommitted(gameId, msg.sender, boardRoot, randomCommit);
 
         if (game.boardRoot1 != bytes32(0) && game.boardRoot2 != bytes32(0)) {
-            game.phase = Phase.Attack;
-            game.currentAttacker = PLAYER_1;
-            game.actionDeadline = _deadlineFromNow(ATTACK_TIMEOUT);
+            game.phase = Phase.RandomReveal;
+            game.actionDeadline = _deadlineFromNow(RANDOM_REVEAL_TIMEOUT);
+        }
+    }
+
+    function revealRandomness(uint256 gameId, bytes32 randomSecret)
+        external
+        gameExists(gameId)
+        onlyPlayer(gameId)
+    {
+        Game storage game = games[gameId];
+
+        require(game.phase == Phase.RandomReveal, "Not random reveal phase");
+        require(block.timestamp <= game.actionDeadline, "Random reveal deadline passed");
+        require(randomSecret != bytes32(0), "Empty random secret");
+
+        bytes32 expectedCommit = makeFirstMoveCommit(gameId, msg.sender, randomSecret);
+
+        if (msg.sender == game.player1) {
+            require(game.randomSecret1 == bytes32(0), "Player 1 already revealed");
+            require(expectedCommit == game.randomCommit1, "Bad player 1 random secret");
+            game.randomSecret1 = randomSecret;
+        } else {
+            require(game.randomSecret2 == bytes32(0), "Player 2 already revealed");
+            require(expectedCommit == game.randomCommit2, "Bad player 2 random secret");
+            game.randomSecret2 = randomSecret;
+        }
+
+        emit RandomnessRevealed(gameId, msg.sender);
+
+        if (game.randomSecret1 != bytes32(0) && game.randomSecret2 != bytes32(0)) {
+            _chooseFirstAttacker(gameId);
         }
     }
 
@@ -273,6 +327,11 @@ contract BattleshipGame {
             return;
         }
 
+        if (game.phase == Phase.RandomReveal) {
+            _claimRandomRevealTimeout(gameId);
+            return;
+        }
+
         if (game.phase == Phase.Attack) {
             _finishGame(gameId, _opponentRole(game.currentAttacker));
             return;
@@ -349,6 +408,27 @@ contract BattleshipGame {
                 player,
                 cell,
                 masterSalt,
+                address(this)
+            )
+        );
+    }
+
+    function makeFirstMoveCommit(
+        uint256 gameId,
+        address player,
+        bytes32 randomSecret
+    )
+        public
+        view
+        returns (bytes32)
+    {
+        require(randomSecret != bytes32(0), "Empty random secret");
+
+        return keccak256(
+            abi.encodePacked(
+                gameId,
+                player,
+                randomSecret,
                 address(this)
             )
         );
@@ -458,6 +538,27 @@ contract BattleshipGame {
         );
     }
 
+    function getRandomness(uint256 gameId)
+        external
+        view
+        gameExists(gameId)
+        returns (
+            bytes32 randomCommit1,
+            bytes32 randomCommit2,
+            bool player1Revealed,
+            bool player2Revealed
+        )
+    {
+        Game storage game = games[gameId];
+
+        return (
+            game.randomCommit1,
+            game.randomCommit2,
+            game.randomSecret1 != bytes32(0),
+            game.randomSecret2 != bytes32(0)
+        );
+    }
+
     function _claimBoardSetupTimeout(uint256 gameId) internal {
         Game storage game = games[gameId];
 
@@ -478,6 +579,57 @@ contract BattleshipGame {
         } else {
             _finishGame(gameId, PLAYER_2);
         }
+    }
+
+    function _claimRandomRevealTimeout(uint256 gameId) internal {
+        Game storage game = games[gameId];
+
+        bool player1Revealed = game.randomSecret1 != bytes32(0);
+        bool player2Revealed = game.randomSecret2 != bytes32(0);
+
+        if (player1Revealed && !player2Revealed) {
+            _finishGame(gameId, PLAYER_1);
+            return;
+        }
+
+        if (!player1Revealed && player2Revealed) {
+            _finishGame(gameId, PLAYER_2);
+            return;
+        }
+
+        require(!player1Revealed && !player2Revealed, "Both players revealed");
+
+        game.phase = Phase.Cancelled;
+        game.actionDeadline = 0;
+        emit GameCancelled(gameId);
+    }
+
+    function _chooseFirstAttacker(uint256 gameId) internal {
+        Game storage game = games[gameId];
+
+        bytes32 randomSeed = keccak256(
+            abi.encodePacked(
+                gameId,
+                game.player1,
+                game.player2,
+                game.boardRoot1,
+                game.boardRoot2,
+                game.randomSecret1,
+                game.randomSecret2,
+                address(this)
+            )
+        );
+        uint8 firstAttacker = uint256(randomSeed) % 2 == 0 ? PLAYER_1 : PLAYER_2;
+
+        game.currentAttacker = firstAttacker;
+        game.phase = Phase.Attack;
+        game.actionDeadline = _deadlineFromNow(ATTACK_TIMEOUT);
+
+        emit FirstAttackerChosen(
+            gameId,
+            _roleAddress(game, firstAttacker),
+            randomSeed
+        );
     }
 
     function _finishGame(uint256 gameId, uint8 winnerRole) internal {
