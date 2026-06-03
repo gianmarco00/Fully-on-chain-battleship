@@ -378,6 +378,23 @@ h3 {
   background: #7dd3fc;
 }
 
+.board-cell-blocked {
+  color: #94a3b8;
+  border-color: rgb(100 116 139 / 22%);
+  cursor: not-allowed;
+}
+
+.board-cell-blocked:hover,
+.board-cell-blocked:focus-visible {
+  outline: none;
+  background: #eff6ff;
+}
+
+.board-cell-blocked:nth-child(odd):hover,
+.board-cell-blocked:nth-child(odd):focus-visible {
+  background: #ffffff;
+}
+
 .board-cell-attackable {
   cursor: pointer;
 }

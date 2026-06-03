@@ -62,6 +62,11 @@ type PlacedShip = ShipPlacement & {
   cells: number[];
 };
 
+type CandidatePlacement = {
+  cells: number[];
+  blockedReason: string | null;
+};
+
 const POLL_MS = 1000;
 const LOBBY_POLL_MS = 300;
 const PHASE_WAITING = 0;
@@ -382,25 +387,43 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
         ? gameState.player1
         : null;
   const placedShipCells = placedShips.flatMap((ship) => ship.cells);
+  const placedShipCellSet = new Set(placedShipCells);
   const placedShipIds = new Set(placedShips.map((ship) => ship.shipId));
   const selectedShip = SHIP_DEFINITIONS.find(
     (ship) => ship.id === selectedShipId && !placedShipIds.has(ship.id)
   );
   const nextUnplacedShip =
     selectedShip ?? SHIP_DEFINITIONS.find((ship) => !placedShipIds.has(ship.id));
+  const candidatePlacementForCell = (cell: number): CandidatePlacement => {
+    if (!nextUnplacedShip) {
+      return { cells: [], blockedReason: "all ships placed" };
+    }
+
+    try {
+      const cells = cellsForShipPlacement(
+        cell,
+        nextUnplacedShip.length,
+        shipHorizontal
+      );
+      const overlappingCell = cells.find((shipCell) =>
+        placedShipCellSet.has(shipCell)
+      );
+
+      if (overlappingCell !== undefined) {
+        return {
+          cells: [],
+          blockedReason: `overlaps ${cellLabel(overlappingCell)}`,
+        };
+      }
+
+      return { cells, blockedReason: null };
+    } catch {
+      return { cells: [], blockedReason: "outside board" };
+    }
+  };
   const previewCells =
-    nextUnplacedShip && hoveredBoardCell !== null
-      ? (() => {
-          try {
-            return cellsForShipPlacement(
-              hoveredBoardCell,
-              nextUnplacedShip.length,
-              shipHorizontal
-            );
-          } catch {
-            return [];
-          }
-        })()
+    hoveredBoardCell !== null
+      ? candidatePlacementForCell(hoveredBoardCell).cells
       : [];
   const ownShipCells = savedShipCells.length > 0 ? savedShipCells : placedShipCells;
 
@@ -1167,13 +1190,19 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
     }
 
     try {
-      const cells = cellsForShipPlacement(cell, shipToPlace.length, shipHorizontal);
-      const overlappingCell = cells.find((shipCell) =>
-        placedShipCells.includes(shipCell)
-      );
+      const candidatePlacement = candidatePlacementForCell(cell);
 
-      if (overlappingCell !== undefined) {
-        throw new Error(`Ship overlaps at ${cellLabel(overlappingCell)}.`);
+      if (candidatePlacement.blockedReason) {
+        devLog("gameWindow:boardSetup:shipPlace:blocked", {
+          gameId,
+          windowPlayerAddress: playerAddress,
+          shipId: shipToPlace.id,
+          cell,
+          label: cellLabel(cell),
+          shipHorizontal,
+          reason: candidatePlacement.blockedReason,
+        });
+        return;
       }
 
       const nextPlacedShips: PlacedShip[] = [
@@ -1184,7 +1213,7 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
           length: shipToPlace.length,
           startCell: cell,
           horizontal: shipHorizontal,
-          cells,
+          cells: candidatePlacement.cells,
         },
       ];
       const nextShip = SHIP_DEFINITIONS.find(
@@ -1548,6 +1577,12 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
           >
             {BOARD_CELLS.map((cell) => {
               const placed = placedShipCells.includes(cell);
+              const candidatePlacement = candidatePlacementForCell(cell);
+              const placementBlocked =
+                !committingBoard &&
+                !currentPlayerBoardCommitted &&
+                Boolean(candidatePlacement.blockedReason);
+              const blocked = !placed && placementBlocked;
               const preview =
                 !placed &&
                 !committingBoard &&
@@ -1562,12 +1597,14 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
                     "board-cell",
                     placed ? "board-cell-selected" : "",
                     preview ? "board-cell-preview" : "",
+                    blocked ? "board-cell-blocked" : "",
                   ]
                     .filter(Boolean)
                     .join(" ")}
                   onMouseEnter={() => setHoveredBoardCell(cell)}
                   onClick={() => handleBoardCellClick(cell)}
                   disabled={committingBoard || currentPlayerBoardCommitted}
+                  aria-disabled={placementBlocked}
                   aria-label={`Cell ${cellLabel(cell)}`}
                 >
                   {cellLabel(cell)}
