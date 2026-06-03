@@ -20,6 +20,7 @@ import {
 import { devLog, devTrace } from "./devLog";
 
 const DEFAULT_WRITE_GAS_LIMIT = 250_000n;
+const FINAL_BOARD_AUDIT_GAS_LIMIT = 1_500_000n;
 const FAST_POLLING_INTERVAL_MS = 500;
 
 export type BattleshipGameEventName =
@@ -44,7 +45,7 @@ export type CellRevealedLog = {
   defender: Address;
   cell: number;
   hit: boolean;
-  defenderHitMask: number;
+  defenderHitMask: string;
   transactionHash: Hash | null;
 };
 
@@ -82,7 +83,7 @@ function decodeCellRevealedEventLog(log: {
     defender: asAddress(String(args.defender)),
     cell: Number(args.cell),
     hit: Boolean(args.hit),
-    defenderHitMask: Number(args.defenderHitMask),
+    defenderHitMask: `0x${BigInt(String(args.defenderHitMask)).toString(16)}`,
     transactionHash: log.transactionHash ?? null,
   };
 }
@@ -210,6 +211,60 @@ export async function readHitMasks(gameId: bigint): Promise<readonly unknown[]> 
     return hitMasks;
   } catch (error) {
     devLog("contract:getHitMasks:error", { gameId, error });
+    throw error;
+  }
+}
+
+export async function computeBoardRoot(
+  gameId: bigint,
+  playerAddress: string,
+  masterSalt: Hex,
+  shipStartCells: readonly number[],
+  shipHorizontal: readonly boolean[]
+): Promise<Hex> {
+  if (shipStartCells.length !== 5 || shipHorizontal.length !== 5) {
+    throw new Error("Board root computation requires exactly five ship placements.");
+  }
+
+  devLog("contract:computeBoardRoot:start", {
+    gameId,
+    playerAddress,
+    shipStartCells,
+    shipHorizontal,
+  });
+
+  const client = createBattleshipPublicClient();
+
+  try {
+    const boardRoot = (await client.readContract({
+      address: asAddress(BATTLESHIP_CONTRACT_ADDRESS),
+      abi: BATTLESHIP_ABI,
+      functionName: "computeBoardRoot",
+      args: [
+        gameId,
+        asAddress(playerAddress),
+        masterSalt,
+        shipStartCells,
+        shipHorizontal,
+      ],
+    })) as Hex;
+
+    devLog("contract:computeBoardRoot:success", {
+      gameId,
+      playerAddress,
+      shipStartCells,
+      shipHorizontal,
+      boardRoot,
+    });
+    return boardRoot;
+  } catch (error) {
+    devLog("contract:computeBoardRoot:error", {
+      gameId,
+      playerAddress,
+      shipStartCells,
+      shipHorizontal,
+      error,
+    });
     throw error;
   }
 }
@@ -489,14 +544,19 @@ export async function revealCell(
 
 export async function revealFinalBoard(
   gameId: bigint,
-  shipMask: number,
-  salts: readonly Hex[],
+  masterSalt: Hex,
+  shipStartCells: readonly number[],
+  shipHorizontal: readonly boolean[],
   senderAddress: string
 ): Promise<Hash> {
+  if (shipStartCells.length !== 5 || shipHorizontal.length !== 5) {
+    throw new Error("Final board audit requires exactly five ship placements.");
+  }
+
   devLog("contract:revealFinalBoard:start", {
     gameId,
-    shipMask,
-    saltCount: salts.length,
+    shipStartCells,
+    shipHorizontal,
     senderAddress,
     contract: BATTLESHIP_CONTRACT_ADDRESS,
   });
@@ -506,17 +566,17 @@ export async function revealFinalBoard(
     const data = encodeFunctionData({
       abi: BATTLESHIP_ABI,
       functionName: "revealFinalBoard",
-      args: [gameId, shipMask, salts],
+      args: [gameId, masterSalt, shipStartCells, shipHorizontal],
     });
 
     devLog("contract:revealFinalBoard:sendTransaction:request", {
       gameId,
-      shipMask,
-      saltCount: salts.length,
+      shipStartCells,
+      shipHorizontal,
       senderAddress,
       contract: BATTLESHIP_CONTRACT_ADDRESS,
       functionName: "revealFinalBoard",
-      gas: DEFAULT_WRITE_GAS_LIMIT,
+      gas: FINAL_BOARD_AUDIT_GAS_LIMIT,
     });
 
     const hash = (await provider.request({
@@ -526,15 +586,15 @@ export async function revealFinalBoard(
           from: asAddress(senderAddress),
           to: asAddress(BATTLESHIP_CONTRACT_ADDRESS),
           data,
-          gas: numberToHex(DEFAULT_WRITE_GAS_LIMIT),
+          gas: numberToHex(FINAL_BOARD_AUDIT_GAS_LIMIT),
         },
       ],
     })) as Hash;
 
     devLog("contract:revealFinalBoard:txSent", {
       gameId,
-      shipMask,
-      saltCount: salts.length,
+      shipStartCells,
+      shipHorizontal,
       senderAddress,
       hash,
     });
@@ -542,8 +602,8 @@ export async function revealFinalBoard(
   } catch (error) {
     devLog("contract:revealFinalBoard:error", {
       gameId,
-      shipMask,
-      saltCount: salts.length,
+      shipStartCells,
+      shipHorizontal,
       senderAddress,
       error,
     });

@@ -268,16 +268,68 @@ h3 {
   font-weight: 700;
 }
 
-.fleet-board {
+.ship-selector {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 6px;
-  width: min(100%, 420px);
+  gap: 8px;
+  width: min(100%, 720px);
+  margin: 22px auto 0;
+}
+
+.ship-button {
+  display: grid;
+  gap: 4px;
+  min-height: 64px;
+  padding: 10px;
+  border: 1px solid #bfdbfe;
+  border-radius: 8px;
+  color: #0f172a;
+  background: #ffffff;
+  box-shadow: 0 8px 18px rgb(15 23 42 / 8%);
+  cursor: pointer;
+}
+
+.ship-button span,
+.ship-button strong {
+  overflow-wrap: anywhere;
+}
+
+.ship-button span {
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.ship-button strong {
+  color: #2563eb;
+  font-size: 12px;
+}
+
+.ship-button-active {
+  border-color: #2563eb;
+  background: #dbeafe;
+}
+
+.ship-button-placed {
+  color: #ffffff;
+  border-color: #334155;
+  background: #334155;
+  cursor: default;
+}
+
+.ship-button-placed strong {
+  color: #dbeafe;
+}
+
+.fleet-board {
+  display: grid;
+  grid-template-columns: repeat(10, minmax(0, 1fr));
+  gap: 4px;
+  width: min(100%, 560px);
   margin: 24px auto 0;
   aspect-ratio: 1;
   padding: 8px;
   border: 1px solid #bfdbfe;
-  border-radius: 14px;
+  border-radius: 8px;
   background: #dbeafe;
 }
 
@@ -287,11 +339,11 @@ h3 {
   width: 100%;
   aspect-ratio: 1;
   border: 1px solid rgb(37 99 235 / 24%);
-  border-radius: 8px;
+  border-radius: 4px;
   padding: 0;
   color: #0f172a;
   background: #eff6ff;
-  font-size: 14px;
+  font-size: 11px;
   font-weight: 800;
 }
 
@@ -316,6 +368,14 @@ h3 {
 .board-cell-selected:hover,
 .board-cell-selected:focus-visible {
   background: #374151;
+}
+
+.board-cell-preview,
+.board-cell-preview:nth-child(odd),
+.board-cell-preview:hover,
+.board-cell-preview:focus-visible {
+  border-color: #0369a1;
+  background: #7dd3fc;
 }
 
 .board-cell-attackable {
@@ -382,7 +442,7 @@ h3 {
   display: flex;
   justify-content: space-between;
   gap: 16px;
-  width: min(100%, 420px);
+  width: min(100%, 560px);
   margin: 14px auto 0;
   padding: 0 4px;
 }
@@ -409,6 +469,10 @@ h3 {
 
   .inline-input {
     flex-direction: column;
+  }
+
+  .ship-selector {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .game-state-panel strong {

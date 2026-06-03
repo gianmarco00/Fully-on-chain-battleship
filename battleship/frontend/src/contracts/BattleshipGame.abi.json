@@ -128,9 +128,9 @@
       },
       {
         "indexed": false,
-        "internalType": "uint32",
+        "internalType": "uint256",
         "name": "defenderHitMask",
-        "type": "uint32"
+        "type": "uint256"
       }
     ],
     "name": "CellRevealed",
@@ -292,6 +292,19 @@
   },
   {
     "inputs": [],
+    "name": "FLEET_CELL_COUNT",
+    "outputs": [
+      {
+        "internalType": "uint8",
+        "name": "",
+        "type": "uint8"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
     "name": "REVEAL_TIMEOUT",
     "outputs": [
       {
@@ -404,14 +417,19 @@
         "type": "address"
       },
       {
-        "internalType": "uint32",
-        "name": "shipMask",
-        "type": "uint32"
+        "internalType": "bytes32",
+        "name": "masterSalt",
+        "type": "bytes32"
       },
       {
-        "internalType": "bytes32[]",
-        "name": "cellSalts",
-        "type": "bytes32[]"
+        "internalType": "uint8[5]",
+        "name": "shipStartCells",
+        "type": "uint8[5]"
+      },
+      {
+        "internalType": "bool[5]",
+        "name": "shipHorizontal",
+        "type": "bool[5]"
       }
     ],
     "name": "computeBoardRoot",
@@ -436,6 +454,40 @@
       }
     ],
     "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "gameId",
+        "type": "uint256"
+      },
+      {
+        "internalType": "address",
+        "name": "player",
+        "type": "address"
+      },
+      {
+        "internalType": "uint8",
+        "name": "cell",
+        "type": "uint8"
+      },
+      {
+        "internalType": "bytes32",
+        "name": "masterSalt",
+        "type": "bytes32"
+      }
+    ],
+    "name": "deriveCellSalt",
+    "outputs": [
+      {
+        "internalType": "bytes32",
+        "name": "",
+        "type": "bytes32"
+      }
+    ],
+    "stateMutability": "view",
     "type": "function"
   },
   {
@@ -527,14 +579,14 @@
     "name": "getHitMasks",
     "outputs": [
       {
-        "internalType": "uint32",
+        "internalType": "uint256",
         "name": "hitMask1",
-        "type": "uint32"
+        "type": "uint256"
       },
       {
-        "internalType": "uint32",
+        "internalType": "uint256",
         "name": "hitMask2",
-        "type": "uint32"
+        "type": "uint256"
       },
       {
         "internalType": "uint8",
@@ -656,19 +708,43 @@
         "type": "uint256"
       },
       {
-        "internalType": "uint32",
-        "name": "shipMask",
-        "type": "uint32"
+        "internalType": "bytes32",
+        "name": "masterSalt",
+        "type": "bytes32"
       },
       {
-        "internalType": "bytes32[]",
-        "name": "cellSalts",
-        "type": "bytes32[]"
+        "internalType": "uint8[5]",
+        "name": "shipStartCells",
+        "type": "uint8[5]"
+      },
+      {
+        "internalType": "bool[5]",
+        "name": "shipHorizontal",
+        "type": "bool[5]"
       }
     ],
     "name": "revealFinalBoard",
     "outputs": [],
     "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint8",
+        "name": "shipIndex",
+        "type": "uint8"
+      }
+    ],
+    "name": "shipLength",
+    "outputs": [
+      {
+        "internalType": "uint8",
+        "name": "",
+        "type": "uint8"
+      }
+    ],
+    "stateMutability": "pure",
     "type": "function"
   },
   {

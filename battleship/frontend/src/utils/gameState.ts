@@ -31,8 +31,8 @@ export type BattleshipGameState = {
   boardRoot2: string;
   player1BoardCommitted: boolean;
   player2BoardCommitted: boolean;
-  hitMask1: number;
-  hitMask2: number;
+  hitMask1: string;
+  hitMask2: string;
   hitCount1: number;
   hitCount2: number;
 };
@@ -47,6 +47,10 @@ function asNumber(value: unknown): number {
 
 function asBigInt(value: unknown): bigint {
   return typeof value === "bigint" ? value : BigInt(String(value));
+}
+
+function asMaskHex(value: unknown): string {
+  return `0x${asBigInt(value).toString(16)}`;
 }
 
 export function isZeroAddress(address: string): boolean {
@@ -82,8 +86,8 @@ function parseGameState(
     boardRoot2,
     player1BoardCommitted: boardRoot1.toLowerCase() !== EMPTY_BYTES32,
     player2BoardCommitted: boardRoot2.toLowerCase() !== EMPTY_BYTES32,
-    hitMask1: asNumber(hitMasks[0]),
-    hitMask2: asNumber(hitMasks[1]),
+    hitMask1: asMaskHex(hitMasks[0]),
+    hitMask2: asMaskHex(hitMasks[1]),
     hitCount1: asNumber(hitMasks[2]),
     hitCount2: asNumber(hitMasks[3]),
   };
@@ -110,8 +114,8 @@ function buildHeaderState(
     boardRoot2: EMPTY_BYTES32,
     player1BoardCommitted: false,
     player2BoardCommitted: false,
-    hitMask1: 0,
-    hitMask2: 0,
+    hitMask1: "0x0",
+    hitMask2: "0x0",
     hitCount1: 0,
     hitCount2: 0,
   };

@@ -23,8 +23,8 @@ function formatDeadline(deadline: bigint): string {
   return new Date(milliseconds).toLocaleString();
 }
 
-function formatMask(mask: number): string {
-  return `0x${mask.toString(16)}`;
+function formatMask(mask: string): string {
+  return mask;
 }
 
 export function GameStatePanel({ gameState }: GameStatePanelProps) {

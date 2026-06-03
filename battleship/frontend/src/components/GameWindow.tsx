@@ -4,6 +4,7 @@ import {
   attackCell,
   claimTimeout,
   commitBoard,
+  computeBoardRoot,
   readBoardRoots,
   readCellRevealedLogsFromReceipt,
   revealCell,
@@ -13,14 +14,17 @@ import {
 } from "../utils/contract";
 import {
   CELL_COUNT,
-  SHIP_COUNT,
+  FLEET_CELL_COUNT,
+  SHIP_DEFINITIONS,
   buildBoardSecret,
   buildMerkleProof,
   cellLabel,
+  cellsForShipPlacement,
   hasShip,
   loadBoardSecret,
   saveBoardSecret,
 } from "../utils/board";
+import type { ShipDefinition, ShipPlacement } from "../utils/board";
 import { devLog } from "../utils/devLog";
 import {
   formatPlayer,
@@ -51,6 +55,12 @@ type LobbyView = {
 };
 
 type RefreshReason = "initial" | "poll" | "lobby-poll" | "focus" | "event";
+
+type PlacedShip = ShipPlacement & {
+  name: ShipDefinition["name"];
+  length: ShipDefinition["length"];
+  cells: number[];
+};
 
 const POLL_MS = 1000;
 const LOBBY_POLL_MS = 300;
@@ -118,6 +128,17 @@ function formatCountdown(seconds: number): string {
   return `${minutes}:${remainingSeconds.toString().padStart(2, "0")}`;
 }
 
+function isTextEntryTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+
+  return (
+    target.isContentEditable ||
+    target.tagName === "INPUT" ||
+    target.tagName === "TEXTAREA" ||
+    target.tagName === "SELECT"
+  );
+}
+
 function DeadlineTimer({
   gameState,
   nowMs,
@@ -148,7 +169,12 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
   const [boardSetupReadyGameId, setBoardSetupReadyGameId] = useState<string | null>(
     null
   );
-  const [selectedShipCells, setSelectedShipCells] = useState<number[]>([]);
+  const [placedShips, setPlacedShips] = useState<PlacedShip[]>([]);
+  const [selectedShipId, setSelectedShipId] = useState<ShipDefinition["id"]>(
+    SHIP_DEFINITIONS[0].id
+  );
+  const [shipHorizontal, setShipHorizontal] = useState(false);
+  const [hoveredBoardCell, setHoveredBoardCell] = useState<number | null>(null);
   const [committingBoard, setCommittingBoard] = useState(false);
   const [boardCommitMessage, setBoardCommitMessage] = useState("");
   const [boardCommitError, setBoardCommitError] = useState("");
@@ -355,7 +381,63 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
       : gameState && currentRole === "player2"
         ? gameState.player1
         : null;
-  const ownShipCells = savedShipCells.length > 0 ? savedShipCells : selectedShipCells;
+  const placedShipCells = placedShips.flatMap((ship) => ship.cells);
+  const placedShipIds = new Set(placedShips.map((ship) => ship.shipId));
+  const selectedShip = SHIP_DEFINITIONS.find(
+    (ship) => ship.id === selectedShipId && !placedShipIds.has(ship.id)
+  );
+  const nextUnplacedShip =
+    selectedShip ?? SHIP_DEFINITIONS.find((ship) => !placedShipIds.has(ship.id));
+  const previewCells =
+    nextUnplacedShip && hoveredBoardCell !== null
+      ? (() => {
+          try {
+            return cellsForShipPlacement(
+              hoveredBoardCell,
+              nextUnplacedShip.length,
+              shipHorizontal
+            );
+          } catch {
+            return [];
+          }
+        })()
+      : [];
+  const ownShipCells = savedShipCells.length > 0 ? savedShipCells : placedShipCells;
+
+  useEffect(() => {
+    if (!boardSetupVisible || committingBoard || currentPlayerBoardCommitted) {
+      return;
+    }
+
+    function handleOrientationKeyDown(event: KeyboardEvent) {
+      if (event.key.toLowerCase() !== "q" || isTextEntryTarget(event.target)) {
+        return;
+      }
+
+      event.preventDefault();
+      setShipHorizontal((current) => {
+        const next = !current;
+
+        devLog("gameWindow:boardSetup:orientationToggled", {
+          gameId,
+          windowPlayerAddress: playerAddress,
+          shipHorizontal: next,
+        });
+
+        return next;
+      });
+    }
+
+    window.addEventListener("keydown", handleOrientationKeyDown);
+
+    return () => window.removeEventListener("keydown", handleOrientationKeyDown);
+  }, [
+    boardSetupVisible,
+    committingBoard,
+    currentPlayerBoardCommitted,
+    gameId,
+    playerAddress,
+  ]);
 
   useEffect(() => {
     if (!gameStarting) {
@@ -821,18 +903,53 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
         setAuditMessage("Auditing final board...");
         setAuditError("");
 
+        if (
+          !boardSecret.masterSalt ||
+          !boardSecret.shipStartCells ||
+          !boardSecret.shipHorizontal
+        ) {
+          throw new Error("Classic ship placement audit is not ready yet.");
+        }
+
+        const boardRoots = await readBoardRoots(gameId);
+        const committedRoot = String(
+          currentRole === "player1" ? boardRoots[0] : boardRoots[1]
+        );
+        const computedRoot = await computeBoardRoot(
+          gameId,
+          auditorAddress,
+          boardSecret.masterSalt,
+          boardSecret.shipStartCells,
+          boardSecret.shipHorizontal
+        );
+        const matchesCommittedRoot =
+          computedRoot.toLowerCase() === committedRoot.toLowerCase();
+        const matchesLocalRoot =
+          computedRoot.toLowerCase() === boardSecret.root.toLowerCase();
+
         devLog("gameWindow:autoAudit:prepared", {
           gameId,
           windowPlayerAddress: auditorAddress,
-          shipMask: boardSecret.shipMask,
-          saltCount: boardSecret.salts.length,
-          boardRoot: boardSecret.root,
+          shipStartCells: boardSecret.shipStartCells,
+          shipHorizontal: boardSecret.shipHorizontal,
+          localRoot: boardSecret.root,
+          committedRoot,
+          computedRoot,
+          matchesCommittedRoot,
+          matchesLocalRoot,
         });
+
+        if (!matchesCommittedRoot || !matchesLocalRoot) {
+          throw new Error(
+            "Local board secret does not match the committed audit root."
+          );
+        }
 
         const txHash = await revealFinalBoard(
           gameId,
-          boardSecret.shipMask,
-          boardSecret.salts,
+          boardSecret.masterSalt,
+          boardSecret.shipStartCells,
+          boardSecret.shipHorizontal,
           auditorAddress
         );
 
@@ -841,7 +958,8 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
           gameId,
           windowPlayerAddress: auditorAddress,
           txHash,
-          shipMask: boardSecret.shipMask,
+          shipStartCells: boardSecret.shipStartCells,
+          shipHorizontal: boardSecret.shipHorizontal,
         });
 
         await waitForTransaction(txHash);
@@ -894,7 +1012,7 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
     playerAddress,
   ]);
 
-  async function commitSelectedBoard(shipCells: number[]) {
+  async function commitSelectedBoard(nextPlacedShips: readonly PlacedShip[]) {
     if (!gameState || !playerAddress) {
       setBoardCommitError("Game or player is not ready yet.");
       devLog("gameWindow:boardCommit:blocked", {
@@ -948,16 +1066,24 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
       return;
     }
 
-    const boardSecret = buildBoardSecret({
-      gameId,
-      playerAddress,
-      shipCells,
-    });
+    const placements = nextPlacedShips.map((ship) => ({
+      shipId: ship.shipId,
+      startCell: ship.startCell,
+      horizontal: ship.horizontal,
+    }));
+    let boardRoot: string | null = null;
 
     try {
       setCommittingBoard(true);
       setBoardCommitError("");
       setBoardCommitMessage("Committing board root...");
+
+      const boardSecret = buildBoardSecret({
+        gameId,
+        playerAddress,
+        placements,
+      });
+      boardRoot = boardSecret.root;
 
       saveBoardSecret(boardSecret);
       setSavedShipCells(boardSecret.shipCells);
@@ -965,8 +1091,8 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
         gameId,
         windowPlayerAddress: playerAddress,
         role,
-        shipCells,
-        shipMask: boardSecret.shipMask,
+        shipCount: placements.length,
+        shipCellCount: boardSecret.shipCells.length,
         boardRoot: boardSecret.root,
       });
 
@@ -1010,7 +1136,7 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
       devLog("gameWindow:boardCommit:error", {
         gameId,
         windowPlayerAddress: playerAddress,
-        boardRoot: boardSecret.root,
+        boardRoot,
         error,
       });
     } finally {
@@ -1026,30 +1152,83 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
       windowPlayerAddress: playerAddress,
       cell,
       label: cellLabel(cell),
+      selectedShipId,
     });
 
-    if (selectedShipCells.includes(cell)) {
-      const nextCells = selectedShipCells.filter((shipCell) => shipCell !== cell);
-      setSelectedShipCells(nextCells);
+    const shipToPlace =
+      SHIP_DEFINITIONS.find(
+        (ship) => ship.id === selectedShipId && !placedShipIds.has(ship.id)
+      ) ?? SHIP_DEFINITIONS.find((ship) => !placedShipIds.has(ship.id));
+
+    if (!shipToPlace) {
       setBoardCommitMessage("");
-      setBoardCommitError("");
+      setBoardCommitError("All ships have already been placed.");
       return;
     }
 
-    if (selectedShipCells.length >= SHIP_COUNT) return;
+    try {
+      const cells = cellsForShipPlacement(cell, shipToPlace.length, shipHorizontal);
+      const overlappingCell = cells.find((shipCell) =>
+        placedShipCells.includes(shipCell)
+      );
 
-    const nextCells = [...selectedShipCells, cell];
-    setSelectedShipCells(nextCells);
-    setBoardCommitMessage("");
-    setBoardCommitError("");
+      if (overlappingCell !== undefined) {
+        throw new Error(`Ship overlaps at ${cellLabel(overlappingCell)}.`);
+      }
 
-    if (nextCells.length === SHIP_COUNT) {
-      commitSelectedBoard(nextCells).catch((error) => {
-        devLog("gameWindow:boardCommit:unhandledError", {
-          gameId,
-          windowPlayerAddress: playerAddress,
-          error,
+      const nextPlacedShips: PlacedShip[] = [
+        ...placedShips,
+        {
+          shipId: shipToPlace.id,
+          name: shipToPlace.name,
+          length: shipToPlace.length,
+          startCell: cell,
+          horizontal: shipHorizontal,
+          cells,
+        },
+      ];
+      const nextShip = SHIP_DEFINITIONS.find(
+        (ship) => !nextPlacedShips.some((placedShip) => placedShip.shipId === ship.id)
+      );
+
+      setPlacedShips(nextPlacedShips);
+      setHoveredBoardCell(null);
+      setSelectedShipId(nextShip?.id ?? shipToPlace.id);
+      setBoardCommitMessage("");
+      setBoardCommitError("");
+
+      devLog("gameWindow:boardSetup:shipPlaced", {
+        gameId,
+        windowPlayerAddress: playerAddress,
+        shipId: shipToPlace.id,
+        shipName: shipToPlace.name,
+        length: shipToPlace.length,
+        startCell: cell,
+        label: cellLabel(cell),
+        shipHorizontal,
+        shipsPlaced: nextPlacedShips.length,
+      });
+
+      if (nextPlacedShips.length === SHIP_DEFINITIONS.length) {
+        commitSelectedBoard(nextPlacedShips).catch((error) => {
+          devLog("gameWindow:boardCommit:unhandledError", {
+            gameId,
+            windowPlayerAddress: playerAddress,
+            error,
+          });
         });
+      }
+    } catch (error) {
+      setBoardCommitMessage("");
+      setBoardCommitError(
+        error instanceof Error ? error.message : "Could not place ship."
+      );
+      devLog("gameWindow:boardSetup:shipPlace:error", {
+        gameId,
+        windowPlayerAddress: playerAddress,
+        shipId: shipToPlace.id,
+        cell,
+        error,
       });
     }
   }
@@ -1332,29 +1511,82 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
           <p className="eyebrow">Game {gameId.toString()}</p>
           <h1>Position your fleet</h1>
 
-          <div className="fleet-board" aria-label="Battleship board">
-            {BOARD_CELLS.map((cell) => (
-              <button
-                key={cell}
-                type="button"
-                className={
-                  selectedShipCells.includes(cell)
-                    ? "board-cell board-cell-selected"
-                    : "board-cell"
-                }
-                onClick={() => handleBoardCellClick(cell)}
-                disabled={committingBoard || currentPlayerBoardCommitted}
-                aria-label={`Cell ${cellLabel(cell)}`}
-              >
-                {cellLabel(cell)}
-              </button>
-            ))}
+          <div className="ship-selector" aria-label="Ships">
+            {SHIP_DEFINITIONS.map((ship) => {
+              const placed = placedShipIds.has(ship.id);
+              const active = nextUnplacedShip?.id === ship.id && !placed;
+
+              return (
+                <button
+                  key={ship.id}
+                  type="button"
+                  className={[
+                    "ship-button",
+                    active ? "ship-button-active" : "",
+                    placed ? "ship-button-placed" : "",
+                  ]
+                    .filter(Boolean)
+                    .join(" ")}
+                  onClick={() => {
+                    setSelectedShipId(ship.id);
+                    setBoardCommitMessage("");
+                    setBoardCommitError("");
+                  }}
+                  disabled={committingBoard || currentPlayerBoardCommitted || placed}
+                >
+                  <span>{ship.name}</span>
+                  <strong>{ship.length} holes</strong>
+                </button>
+              );
+            })}
+          </div>
+
+          <div
+            className="fleet-board"
+            aria-label="Battleship board"
+            onMouseLeave={() => setHoveredBoardCell(null)}
+          >
+            {BOARD_CELLS.map((cell) => {
+              const placed = placedShipCells.includes(cell);
+              const preview =
+                !placed &&
+                !committingBoard &&
+                !currentPlayerBoardCommitted &&
+                previewCells.includes(cell);
+
+              return (
+                <button
+                  key={cell}
+                  type="button"
+                  className={[
+                    "board-cell",
+                    placed ? "board-cell-selected" : "",
+                    preview ? "board-cell-preview" : "",
+                  ]
+                    .filter(Boolean)
+                    .join(" ")}
+                  onMouseEnter={() => setHoveredBoardCell(cell)}
+                  onClick={() => handleBoardCellClick(cell)}
+                  disabled={committingBoard || currentPlayerBoardCommitted}
+                  aria-label={`Cell ${cellLabel(cell)}`}
+                >
+                  {cellLabel(cell)}
+                </button>
+              );
+            })}
           </div>
 
           <div className="board-setup-status">
-            <span className="label">Ships selected</span>
+            <span className="label">Ships placed</span>
             <strong>
-              {selectedShipCells.length} / {SHIP_COUNT}
+              {placedShips.length} / {SHIP_DEFINITIONS.length}
+            </strong>
+          </div>
+
+          <div className="board-setup-status">
+            <span className="label">Cells occupied</span>
+            <strong>
+              {placedShipCells.length} / {FLEET_CELL_COUNT}
             </strong>
           </div>
 

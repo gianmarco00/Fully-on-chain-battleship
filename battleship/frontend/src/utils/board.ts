@@ -11,17 +11,36 @@ import { BATTLESHIP_CONTRACT_ADDRESS } from "../config/contract";
 import { asAddress } from "./contract";
 import { devLog, devTrace } from "./devLog";
 
-export const BOARD_SIZE = 5;
+export const BOARD_SIZE = 10;
 export const CELL_COUNT = BOARD_SIZE * BOARD_SIZE;
-export const SHIP_COUNT = 3;
+export const SHIP_COUNT = 5;
+export const FLEET_CELL_COUNT = 17;
+export const SHIP_DEFINITIONS = [
+  { id: "aircraftCarrier", name: "Aircraft Carrier", length: 5 },
+  { id: "battleship", name: "Battleship", length: 4 },
+  { id: "destroyer", name: "Destroyer", length: 3 },
+  { id: "submarine", name: "Submarine", length: 3 },
+  { id: "patrolBoat", name: "Patrol Boat", length: 2 },
+] as const;
 
 const BOARD_SECRET_KEY_PREFIX = "battleship:board-secret";
+
+export type ShipDefinition = (typeof SHIP_DEFINITIONS)[number];
+
+export type ShipPlacement = {
+  shipId: ShipDefinition["id"];
+  startCell: number;
+  horizontal: boolean;
+};
 
 export type BoardSecret = {
   gameId: string;
   playerAddress: Address;
   shipCells: number[];
-  shipMask: number;
+  shipMask: string;
+  masterSalt?: Hex;
+  shipStartCells?: number[];
+  shipHorizontal?: boolean[];
   salts: Hex[];
   leaves: Hex[];
   root: Hex;
@@ -46,9 +65,9 @@ export function validateCell(cell: number): number {
   return cell;
 }
 
-export function shipMaskFromCells(shipCells: readonly number[]): number {
-  if (shipCells.length !== SHIP_COUNT) {
-    throw new Error(`Board must contain exactly ${SHIP_COUNT} ships.`);
+export function shipMaskFromCells(shipCells: readonly number[]): string {
+  if (shipCells.length !== FLEET_CELL_COUNT) {
+    throw new Error(`Board must contain exactly ${FLEET_CELL_COUNT} ship cells.`);
   }
 
   const uniqueCells = new Set(shipCells.map(validateCell));
@@ -57,17 +76,103 @@ export function shipMaskFromCells(shipCells: readonly number[]): number {
     throw new Error("Ship cells must be unique.");
   }
 
-  let mask = 0;
+  let mask = 0n;
 
   for (const cell of uniqueCells) {
-    mask |= 1 << cell;
+    mask |= 1n << BigInt(cell);
   }
 
-  return mask;
+  return `0x${mask.toString(16)}`;
 }
 
-export function hasShip(shipMask: number, cell: number): boolean {
-  return (shipMask & (1 << validateCell(cell))) !== 0;
+export function hasShip(shipMask: string, cell: number): boolean {
+  return (BigInt(shipMask) & (1n << BigInt(validateCell(cell)))) !== 0n;
+}
+
+export function shipDefinitionById(shipId: string): ShipDefinition {
+  const ship = SHIP_DEFINITIONS.find((definition) => definition.id === shipId);
+
+  if (!ship) {
+    throw new Error("Unknown ship.");
+  }
+
+  return ship;
+}
+
+export function cellsForShipPlacement(
+  startCell: number,
+  length: number,
+  horizontal = true
+): number[] {
+  const start = validateCell(startCell);
+  const cells: number[] = [];
+
+  for (let offset = 0; offset < length; offset += 1) {
+    const cell = start + offset * (horizontal ? 1 : BOARD_SIZE);
+    validateCell(cell);
+
+    if (horizontal && Math.floor(cell / BOARD_SIZE) !== Math.floor(start / BOARD_SIZE)) {
+      throw new Error("Ship would cross the board edge.");
+    }
+
+    cells.push(cell);
+  }
+
+  return cells;
+}
+
+export function shipCellsFromPlacements(
+  placements: readonly ShipPlacement[]
+): number[] {
+  if (placements.length !== SHIP_COUNT) {
+    throw new Error(`Board must contain exactly ${SHIP_COUNT} ships.`);
+  }
+
+  const orderedPlacements = orderedShipPlacements(placements);
+  const occupiedCells: number[] = [];
+  const seenCells = new Set<number>();
+
+  for (const placement of orderedPlacements) {
+    const ship = shipDefinitionById(placement.shipId);
+    const cells = cellsForShipPlacement(
+      placement.startCell,
+      ship.length,
+      placement.horizontal
+    );
+
+    for (const cell of cells) {
+      if (seenCells.has(cell)) {
+        throw new Error("Ships cannot overlap.");
+      }
+
+      seenCells.add(cell);
+      occupiedCells.push(cell);
+    }
+  }
+
+  if (occupiedCells.length !== FLEET_CELL_COUNT) {
+    throw new Error(`Board must occupy exactly ${FLEET_CELL_COUNT} ship cells.`);
+  }
+
+  return occupiedCells;
+}
+
+export function orderedShipPlacements(
+  placements: readonly ShipPlacement[]
+): ShipPlacement[] {
+  return SHIP_DEFINITIONS.map((ship) => {
+    const placement = placements.find((candidate) => candidate.shipId === ship.id);
+
+    if (!placement) {
+      throw new Error(`Missing ${ship.name}.`);
+    }
+
+    return {
+      shipId: ship.id,
+      startCell: validateCell(placement.startCell),
+      horizontal: Boolean(placement.horizontal),
+    };
+  });
 }
 
 export function generateSalt(): Hex {
@@ -77,6 +182,33 @@ export function generateSalt(): Hex {
 
   const bytes = globalThis.crypto.getRandomValues(new Uint8Array(32));
   return bytesToHex(bytes);
+}
+
+export function deriveCellSalt({
+  gameId,
+  playerAddress,
+  cell,
+  masterSalt,
+  contractAddress = BATTLESHIP_CONTRACT_ADDRESS,
+}: {
+  gameId: bigint;
+  playerAddress: string;
+  cell: number;
+  masterSalt: Hex;
+  contractAddress?: string;
+}): Hex {
+  return keccak256(
+    encodePacked(
+      ["uint256", "address", "uint8", "bytes32", "address"],
+      [
+        gameId,
+        asAddress(playerAddress),
+        validateCell(cell),
+        masterSalt,
+        asAddress(contractAddress),
+      ]
+    )
+  );
 }
 
 export function makeBoardLeaf({
@@ -183,14 +315,24 @@ export function buildMerkleProof(leaves: readonly Hex[], cell: number): Hex[] {
 export function buildBoardSecret({
   gameId,
   playerAddress,
-  shipCells,
+  placements,
 }: {
   gameId: bigint;
   playerAddress: string;
-  shipCells: readonly number[];
+  placements: readonly ShipPlacement[];
 }): BoardSecret {
+  const orderedPlacements = orderedShipPlacements(placements);
+  const shipCells = shipCellsFromPlacements(orderedPlacements);
   const shipMask = shipMaskFromCells(shipCells);
-  const salts = Array.from({ length: CELL_COUNT }, generateSalt);
+  const masterSalt = generateSalt();
+  const salts = Array.from({ length: CELL_COUNT }, (_, cell) =>
+    deriveCellSalt({
+      gameId,
+      playerAddress,
+      cell,
+      masterSalt,
+    })
+  );
   const leaves = salts.map((salt, cell) =>
     makeBoardLeaf({
       gameId,
@@ -207,6 +349,9 @@ export function buildBoardSecret({
     playerAddress: asAddress(playerAddress),
     shipCells: [...shipCells],
     shipMask,
+    masterSalt,
+    shipStartCells: orderedPlacements.map((placement) => placement.startCell),
+    shipHorizontal: orderedPlacements.map((placement) => placement.horizontal),
     salts,
     leaves,
     root,
@@ -217,8 +362,8 @@ export function saveBoardSecret(secret: BoardSecret): void {
   devLog("board:secret:save", {
     gameId: secret.gameId,
     playerAddress: secret.playerAddress,
-    shipCells: secret.shipCells,
-    shipMask: secret.shipMask,
+    shipCount: secret.shipStartCells?.length ?? 0,
+    shipCellCount: secret.shipCells.length,
     root: secret.root,
   });
 
