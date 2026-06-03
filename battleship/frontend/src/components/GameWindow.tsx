@@ -161,6 +161,8 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
   const [attackingCell, setAttackingCell] = useState<number | null>(null);
   const [attackMessage, setAttackMessage] = useState("");
   const [attackError, setAttackError] = useState("");
+  const [phaseTimeoutMessage, setPhaseTimeoutMessage] = useState("");
+  const [phaseTimeoutError, setPhaseTimeoutError] = useState("");
   const [auditMessage, setAuditMessage] = useState("");
   const [auditError, setAuditError] = useState("");
   const [shotResults, setShotResults] = useState<ShotResult[]>(() =>
@@ -170,6 +172,7 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
   const lastStateKey = useRef<string | null>(null);
   const latestPhase = useRef<number | null>(null);
   const autoSetupTimeoutClaimKeys = useRef<Set<string>>(new Set());
+  const autoPhaseTimeoutClaimKeys = useRef<Set<string>>(new Set());
   const autoRevealKeys = useRef<Set<string>>(new Set());
   const autoAuditKeys = useRef<Set<string>>(new Set());
 
@@ -329,10 +332,17 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
   const cellRevealPhaseVisible = gameState?.phase === PHASE_CELL_REVEAL;
   const auditPhaseVisible = gameState?.phase === PHASE_AUDIT;
   const finishedPhaseVisible = gameState?.phase === PHASE_FINISHED;
+  const activePhase = gameState?.phase ?? null;
+  const activePhaseName = gameState?.phaseName ?? "";
+  const activeActionDeadline = gameState?.actionDeadline ?? 0n;
+  const activeCurrentAttacker = gameState?.currentAttacker ?? "";
   const combatPhaseVisible = attackPhaseVisible || cellRevealPhaseVisible;
   const currentPlayerIsAttacker = Boolean(
     gameState && sameAddress(playerAddress, gameState.currentAttacker)
   );
+  const currentPlayerCanClaimTurnTimeout =
+    (attackPhaseVisible && !currentPlayerIsAttacker) ||
+    (cellRevealPhaseVisible && currentPlayerIsAttacker);
   const currentPlayerIsProvisionalWinner = Boolean(
     gameState && sameAddress(playerAddress, gameState.provisionalWinner)
   );
@@ -373,25 +383,27 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
 
   useEffect(() => {
     if (
-      !gameState ||
       !playerAddress ||
       !currentRole ||
-      gameState.phase !== PHASE_BOARD_SETUP ||
+      activePhase !== PHASE_BOARD_SETUP ||
       !currentPlayerBoardCommitted ||
       opponentBoardCommitted ||
-      gameState.actionDeadline === 0n
+      activeActionDeadline === 0n
     ) {
       return;
     }
 
     const claimantAddress = playerAddress;
-    const actionDeadline = gameState.actionDeadline;
+    const actionDeadline = activeActionDeadline;
     const claimKey = [
       gameId.toString(),
       claimantAddress.toLowerCase(),
       currentRole,
       actionDeadline.toString(),
     ].join(":");
+
+    if (autoSetupTimeoutClaimKeys.current.has(claimKey)) return;
+
     const delayMs = Math.max(Number(actionDeadline) * 1000 - Date.now() + 1000, 0);
 
     devLog("gameWindow:setupTimeout:scheduled", {
@@ -475,11 +487,135 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
 
     return () => window.clearTimeout(timeoutId);
   }, [
+    activeActionDeadline,
+    activePhase,
     currentPlayerBoardCommitted,
     currentRole,
     gameId,
-    gameState,
     opponentBoardCommitted,
+    playerAddress,
+  ]);
+
+  useEffect(() => {
+    if (
+      !playerAddress ||
+      !currentRole ||
+      !currentPlayerCanClaimTurnTimeout ||
+      activeActionDeadline === 0n
+    ) {
+      return;
+    }
+
+    const claimantAddress = playerAddress;
+    const actionDeadline = activeActionDeadline;
+    const phase = activePhase;
+    const phaseName = activePhaseName;
+    const currentAttacker = activeCurrentAttacker;
+    const claimKey = [
+      gameId.toString(),
+      claimantAddress.toLowerCase(),
+      phase,
+      currentAttacker.toLowerCase(),
+      actionDeadline.toString(),
+    ].join(":");
+
+    if (autoPhaseTimeoutClaimKeys.current.has(claimKey)) return;
+
+    const delayMs = Math.max(Number(actionDeadline) * 1000 - Date.now() + 1000, 0);
+
+    devLog("gameWindow:phaseTimeout:scheduled", {
+      gameId,
+      windowPlayerAddress: claimantAddress,
+      phase: phaseName,
+      currentAttacker,
+      actionDeadline,
+      delayMs,
+    });
+
+    const timeoutId = window.setTimeout(() => {
+      if (autoPhaseTimeoutClaimKeys.current.has(claimKey)) return;
+      autoPhaseTimeoutClaimKeys.current.add(claimKey);
+
+      async function claimTurnTimeout() {
+        devLog("gameWindow:phaseTimeout:start", {
+          gameId,
+          windowPlayerAddress: claimantAddress,
+          phase: phaseName,
+          currentAttacker,
+        });
+
+        try {
+          const accounts = await getCurrentAccounts();
+          const activeAccount = accounts[0] ?? null;
+
+          if (!sameAddress(activeAccount, claimantAddress)) {
+            throw new Error("Switch MetaMask to this player to claim timeout.");
+          }
+
+          setPhaseTimeoutMessage("Claiming turn timeout...");
+          setPhaseTimeoutError("");
+
+          const txHash = await claimTimeout(gameId, claimantAddress);
+
+          setPhaseTimeoutMessage(
+            "Timeout claim transaction sent. Waiting for confirmation..."
+          );
+          devLog("gameWindow:phaseTimeout:txSent", {
+            gameId,
+            windowPlayerAddress: claimantAddress,
+            phase: phaseName,
+            txHash,
+          });
+
+          await waitForTransaction(txHash);
+          const refreshedState = await loadGameState(gameId);
+          setGameState(refreshedState);
+
+          const claimedWin =
+            refreshedState.phase === PHASE_FINISHED &&
+            sameAddress(claimantAddress, refreshedState.winner);
+
+          devLog("gameWindow:phaseTimeout:registered", {
+            gameId,
+            windowPlayerAddress: claimantAddress,
+            phase: phaseName,
+            txHash,
+            claimedWin,
+            finalPhase: refreshedState.phaseName,
+            winner: refreshedState.winner,
+          });
+
+          if (!claimedWin) {
+            throw new Error("Timeout claim confirmed, but winner did not match.");
+          }
+
+          setPhaseTimeoutMessage("");
+        } catch (error) {
+          setPhaseTimeoutMessage("");
+          setPhaseTimeoutError(
+            error instanceof Error ? error.message : "Timeout claim failed."
+          );
+          devLog("gameWindow:phaseTimeout:error", {
+            gameId,
+            windowPlayerAddress: claimantAddress,
+            phase: phaseName,
+            error,
+          });
+        }
+      }
+
+      claimTurnTimeout();
+    }, delayMs);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [
+    activeActionDeadline,
+    activeCurrentAttacker,
+    activePhase,
+    activePhaseName,
+    currentPlayerCanClaimTurnTimeout,
+    currentRole,
+    gameId,
     playerAddress,
   ]);
 
@@ -495,6 +631,18 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
     }
 
     const defenderAddress = playerAddress;
+    const actionDeadline = gameState.actionDeadline;
+
+    if (actionDeadline !== 0n && Number(actionDeadline) * 1000 <= Date.now()) {
+      devLog("gameWindow:autoReveal:skipped", {
+        gameId,
+        windowPlayerAddress: defenderAddress,
+        reason: "reveal deadline already passed",
+        actionDeadline,
+      });
+      return;
+    }
+
     const cell = gameState.pendingTarget;
     const revealKey = [
       gameId.toString(),
@@ -1124,6 +1272,12 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
 
             {attackMessage && <div className="success">{attackMessage}</div>}
             {attackError && <div className="warning">{attackError}</div>}
+            {phaseTimeoutMessage && (
+              <div className="success">{phaseTimeoutMessage}</div>
+            )}
+            {phaseTimeoutError && (
+              <div className="warning">{phaseTimeoutError}</div>
+            )}
           </section>
         </main>
       );
@@ -1161,6 +1315,10 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
               );
             })}
           </div>
+          {phaseTimeoutMessage && (
+            <div className="success">{phaseTimeoutMessage}</div>
+          )}
+          {phaseTimeoutError && <div className="warning">{phaseTimeoutError}</div>}
         </section>
       </main>
     );
