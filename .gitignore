@@ -7,3 +7,4 @@ build/
 rps_backend/local_secrets/*.json
 
 .DS_Store
+*.png

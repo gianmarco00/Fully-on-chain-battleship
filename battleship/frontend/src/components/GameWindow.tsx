@@ -1,5 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 
+import aircraftCarrierImage from "../../Images/Aircraft carrier.png";
+import anchorImage from "../../Images/Anchor.png";
+import artworkImage from "../../Images/Artwork.png";
+import battleshipImage from "../../Images/Battleship.png";
+import destroyerImage from "../../Images/Destroyer.png";
+import patrolBoatImage from "../../Images/Patrol boat.png";
+import submarineImage from "../../Images/Submarine.png";
+import timonImage from "../../Images/Timon.png";
 import {
   attackCell,
   claimTimeout,
@@ -15,7 +23,6 @@ import {
 } from "../utils/contract";
 import {
   CELL_COUNT,
-  FLEET_CELL_COUNT,
   SHIP_DEFINITIONS,
   buildBoardSecret,
   buildMerkleProof,
@@ -80,7 +87,19 @@ const PHASE_FINISHED = 6;
 const GAME_STARTING_DELAY_MS = 2000;
 const FIRST_ATTACK_ANNOUNCEMENT_MS = 2000;
 const BOARD_CELLS = Array.from({ length: CELL_COUNT }, (_, cell) => cell);
+const BOARD_COLUMNS = Array.from({ length: 10 }, (_, index) =>
+  String.fromCharCode("A".charCodeAt(0) + index)
+);
+const BOARD_ROWS = Array.from({ length: 10 }, (_, index) => index + 1);
+const SETUP_GRID_ITEMS = Array.from({ length: 121 }, (_, index) => index);
 const TIMER_TICK_MS = 1000;
+const SHIP_IMAGES = {
+  aircraftCarrier: aircraftCarrierImage,
+  battleship: battleshipImage,
+  destroyer: destroyerImage,
+  submarine: submarineImage,
+  patrolBoat: patrolBoatImage,
+} satisfies Record<ShipDefinition["id"], string>;
 
 function sameAddress(left: string | null, right: string): boolean {
   return Boolean(left && left.toLowerCase() === right.toLowerCase());
@@ -149,9 +168,11 @@ function isTextEntryTarget(target: EventTarget | null): boolean {
 
 function DeadlineTimer({
   gameState,
+  iconSrc,
   nowMs,
 }: {
   gameState: BattleshipGameState | null;
+  iconSrc?: string;
   nowMs: number;
 }) {
   if (!gameState || gameState.actionDeadline === 0n) return null;
@@ -161,6 +182,15 @@ function DeadlineTimer({
 
   return (
     <div className={expired ? "deadline-timer deadline-timer-expired" : "deadline-timer"}>
+      {iconSrc && (
+        <img
+          src={iconSrc}
+          alt=""
+          className="deadline-timer-icon"
+          aria-hidden="true"
+          draggable={false}
+        />
+      )}
       <span>{gameState.phaseName}</span>
       <strong>{expired ? "Deadline passed" : formatCountdown(secondsLeft)}</strong>
     </div>
@@ -1768,108 +1798,238 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
 
   if (gameStarting && boardSetupVisible) {
     return (
-      <main className="page game-window-page">
-        <section className="card game-window-card">
-          <DeadlineTimer gameState={gameState} nowMs={nowMs} />
-          <p className="eyebrow">Game {gameId.toString()}</p>
-          <h1>Position your fleet</h1>
+      <main className="page game-window-page board-setup-page">
+        <section className="card game-window-card board-setup-card">
+          <div className="board-setup-shell">
+            <div className="board-setup-topbar">
+              <div className="board-setup-titlemark">
+                <img
+                  src={anchorImage}
+                  alt=""
+                  className="anchor-mark"
+                  aria-hidden="true"
+                  draggable={false}
+                />
+                <span>Board Setup</span>
+              </div>
+              <DeadlineTimer
+                gameState={gameState}
+                iconSrc={timonImage}
+                nowMs={nowMs}
+              />
+            </div>
 
-          <div className="ship-selector" aria-label="Ships">
-            {SHIP_DEFINITIONS.map((ship) => {
-              const placed = placedShipIds.has(ship.id);
-              const active = nextUnplacedShip?.id === ship.id && !placed;
+            <div className="board-setup-hero">
+              <div>
+                <p className="eyebrow">Game {gameId.toString()}</p>
+                <h1>Position your fleet</h1>
+              </div>
+              <img
+                src={artworkImage}
+                alt=""
+                className="setup-ship-artwork"
+                aria-hidden="true"
+                draggable={false}
+              />
+            </div>
 
-              return (
-                <button
-                  key={ship.id}
-                  type="button"
-                  className={[
-                    "ship-button",
-                    active ? "ship-button-active" : "",
-                    placed ? "ship-button-placed" : "",
-                  ]
-                    .filter(Boolean)
-                    .join(" ")}
-                  onClick={() => {
-                    setSelectedShipId(ship.id);
-                    setBoardCommitMessage("");
-                    setBoardCommitError("");
-                  }}
-                  disabled={committingBoard || currentPlayerBoardCommitted || placed}
-                >
-                  <span>{ship.name}</span>
-                  <strong>{ship.length} holes</strong>
-                </button>
-              );
-            })}
+            <div className="ship-selector" aria-label="Ships">
+              {SHIP_DEFINITIONS.map((ship) => {
+                const placed = placedShipIds.has(ship.id);
+                const active = nextUnplacedShip?.id === ship.id && !placed;
+
+                return (
+                  <button
+                    key={ship.id}
+                    type="button"
+                    className={[
+                      "ship-button",
+                      active ? "ship-button-active" : "",
+                      placed ? "ship-button-placed" : "",
+                    ]
+                      .filter(Boolean)
+                      .join(" ")}
+                    onClick={() => {
+                      setSelectedShipId(ship.id);
+                      setBoardCommitMessage("");
+                      setBoardCommitError("");
+                    }}
+                    disabled={committingBoard || currentPlayerBoardCommitted || placed}
+                  >
+                    <img
+                      src={SHIP_IMAGES[ship.id]}
+                      alt=""
+                      className={`ship-image ship-image-${ship.id}`}
+                      aria-hidden="true"
+                      draggable={false}
+                    />
+                    <span>{ship.name}</span>
+                    <strong>{ship.length} holes</strong>
+                  </button>
+                );
+              })}
+            </div>
+
+            <div
+              className="setup-board-frame"
+              aria-label="Battleship board"
+              onMouseLeave={() => setHoveredBoardCell(null)}
+            >
+              <div className="setup-board-grid">
+                {SETUP_GRID_ITEMS.map((gridIndex) => {
+                  if (gridIndex === 0) {
+                    return (
+                      <span
+                        key="setup-grid-corner"
+                        className="setup-board-corner"
+                        aria-hidden="true"
+                      />
+                    );
+                  }
+
+                  if (gridIndex <= BOARD_COLUMNS.length) {
+                    const column = BOARD_COLUMNS[gridIndex - 1];
+
+                    return (
+                      <span
+                        key={`setup-grid-column-${column}`}
+                        className="setup-board-column"
+                        aria-hidden="true"
+                      >
+                        {column}
+                      </span>
+                    );
+                  }
+
+                  const bodyIndex = gridIndex - (BOARD_COLUMNS.length + 1);
+                  const rowIndex = Math.floor(bodyIndex / (BOARD_COLUMNS.length + 1));
+                  const columnIndex = bodyIndex % (BOARD_COLUMNS.length + 1);
+
+                  if (columnIndex === 0) {
+                    const row = BOARD_ROWS[rowIndex];
+
+                    return (
+                      <span
+                        key={`setup-grid-row-${row}`}
+                        className="setup-board-row"
+                        aria-hidden="true"
+                      >
+                        {row}
+                      </span>
+                    );
+                  }
+
+                  const cell = rowIndex * BOARD_COLUMNS.length + columnIndex - 1;
+                  const placed = placedShipCells.includes(cell);
+                  const candidatePlacement = candidatePlacementForCell(cell);
+                  const preview =
+                    !placed &&
+                    !committingBoard &&
+                    !currentPlayerBoardCommitted &&
+                    previewCells.includes(cell);
+                  const previewOrigin = preview && hoveredBoardCell === cell;
+                  const placementBlocked =
+                    !committingBoard &&
+                    !currentPlayerBoardCommitted &&
+                    Boolean(candidatePlacement.blockedReason);
+                  const blocked = !placed && !preview && placementBlocked;
+                  const cornerClass =
+                    rowIndex === 0 && columnIndex === 1
+                      ? "board-cell-corner-top-left"
+                      : rowIndex === 0 && columnIndex === BOARD_COLUMNS.length
+                        ? "board-cell-corner-top-right"
+                        : rowIndex === BOARD_ROWS.length - 1 && columnIndex === 1
+                          ? "board-cell-corner-bottom-left"
+                          : rowIndex === BOARD_ROWS.length - 1 &&
+                              columnIndex === BOARD_COLUMNS.length
+                            ? "board-cell-corner-bottom-right"
+                            : "";
+
+                  return (
+                    <button
+                      key={`setup-grid-cell-${cell}`}
+                      type="button"
+                      className={[
+                        "board-cell",
+                        cornerClass,
+                        placed ? "board-cell-selected" : "",
+                        preview ? "board-cell-preview" : "",
+                        previewOrigin ? "board-cell-preview-origin" : "",
+                        blocked ? "board-cell-blocked" : "",
+                        hoveredBoardCell === cell ? "board-cell-hovered" : "",
+                      ]
+                        .filter(Boolean)
+                        .join(" ")}
+                      onMouseEnter={() => setHoveredBoardCell(cell)}
+                      onClick={() => handleBoardCellClick(cell)}
+                      disabled={committingBoard || currentPlayerBoardCommitted}
+                      aria-disabled={placementBlocked}
+                      aria-label={`Cell ${cellLabel(cell)}`}
+                    >
+                      <span className="board-cell-dot" aria-hidden="true" />
+                    </button>
+                  );
+                })}
+              </div>
+
+              <div className="setup-board-legend" aria-hidden="true">
+                <span>
+                  <i className="legend-swatch legend-swatch-placed" />
+                  Placed
+                </span>
+                <span>
+                  <i className="legend-swatch legend-swatch-selected" />
+                  Selected
+                </span>
+              </div>
+            </div>
+
+            <div className="board-setup-footer">
+              <div className="board-setup-progress">
+                <img
+                  src={anchorImage}
+                  alt=""
+                  className="anchor-mark anchor-mark-small"
+                  aria-hidden="true"
+                  draggable={false}
+                />
+                <span className="label">Ships placed</span>
+                <strong>
+                  {placedShips.length}/{SHIP_DEFINITIONS.length}
+                </strong>
+              </div>
+
+              <button
+                type="button"
+                className="clear-board-button"
+                onClick={() => {
+                  setPlacedShips([]);
+                  setHoveredBoardCell(null);
+                  setSelectedShipId(SHIP_DEFINITIONS[0].id);
+                  setBoardCommitMessage("");
+                  setBoardCommitError("");
+                }}
+                disabled={
+                  committingBoard ||
+                  currentPlayerBoardCommitted ||
+                  placedShips.length === 0
+                }
+              >
+                <span aria-hidden="true">↻</span>
+                Clear Board
+              </button>
+            </div>
+
+            {currentPlayerBoardCommitted && (
+              <div className="success">Board already committed.</div>
+            )}
+            {boardCommitMessage && <div className="success">{boardCommitMessage}</div>}
+            {boardCommitError && <div className="warning">{boardCommitError}</div>}
+            {setupTimeoutMessage && (
+              <div className="success">{setupTimeoutMessage}</div>
+            )}
+            {setupTimeoutError && <div className="warning">{setupTimeoutError}</div>}
           </div>
-
-          <div
-            className="fleet-board"
-            aria-label="Battleship board"
-            onMouseLeave={() => setHoveredBoardCell(null)}
-          >
-            {BOARD_CELLS.map((cell) => {
-              const placed = placedShipCells.includes(cell);
-              const candidatePlacement = candidatePlacementForCell(cell);
-              const placementBlocked =
-                !committingBoard &&
-                !currentPlayerBoardCommitted &&
-                Boolean(candidatePlacement.blockedReason);
-              const blocked = !placed && placementBlocked;
-              const preview =
-                !placed &&
-                !committingBoard &&
-                !currentPlayerBoardCommitted &&
-                previewCells.includes(cell);
-
-              return (
-                <button
-                  key={cell}
-                  type="button"
-                  className={[
-                    "board-cell",
-                    placed ? "board-cell-selected" : "",
-                    preview ? "board-cell-preview" : "",
-                    blocked ? "board-cell-blocked" : "",
-                  ]
-                    .filter(Boolean)
-                    .join(" ")}
-                  onMouseEnter={() => setHoveredBoardCell(cell)}
-                  onClick={() => handleBoardCellClick(cell)}
-                  disabled={committingBoard || currentPlayerBoardCommitted}
-                  aria-disabled={placementBlocked}
-                  aria-label={`Cell ${cellLabel(cell)}`}
-                >
-                  {cellLabel(cell)}
-                </button>
-              );
-            })}
-          </div>
-
-          <div className="board-setup-status">
-            <span className="label">Ships placed</span>
-            <strong>
-              {placedShips.length} / {SHIP_DEFINITIONS.length}
-            </strong>
-          </div>
-
-          <div className="board-setup-status">
-            <span className="label">Cells occupied</span>
-            <strong>
-              {placedShipCells.length} / {FLEET_CELL_COUNT}
-            </strong>
-          </div>
-
-          {currentPlayerBoardCommitted && (
-            <div className="success">Board already committed.</div>
-          )}
-          {boardCommitMessage && <div className="success">{boardCommitMessage}</div>}
-          {boardCommitError && <div className="warning">{boardCommitError}</div>}
-          {setupTimeoutMessage && (
-            <div className="success">{setupTimeoutMessage}</div>
-          )}
-          {setupTimeoutError && <div className="warning">{setupTimeoutError}</div>}
         </section>
       </main>
     );
