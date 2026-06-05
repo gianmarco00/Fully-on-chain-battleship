@@ -437,11 +437,11 @@ h3 {
 
 .combat-artwork-attack::before {
   position: absolute;
-  top: 20%;
-  left: 56%;
-  width: 44px;
-  height: 44px;
-  border: 2px solid var(--navy);
+  top: 33%;
+  left: 62%;
+  width: 34px;
+  height: 34px;
+  border: 2.5px solid var(--navy);
   border-radius: 999px;
   content: "";
   transform: translate(-50%, -50%);
@@ -449,13 +449,13 @@ h3 {
 
 .combat-artwork-attack::after {
   position: absolute;
-  top: 20%;
-  left: 56%;
-  width: 64px;
-  height: 64px;
+  top: 33%;
+  left: 62%;
+  width: 50px;
+  height: 50px;
   background:
-    linear-gradient(var(--navy), var(--navy)) center / 2px 64px no-repeat,
-    linear-gradient(90deg, var(--navy), var(--navy)) center / 64px 2px no-repeat;
+    linear-gradient(var(--navy), var(--navy)) center / 2.5px 50px no-repeat,
+    linear-gradient(90deg, var(--navy), var(--navy)) center / 50px 2.5px no-repeat;
   content: "";
   opacity: 0.9;
   transform: translate(-50%, -50%);
@@ -1094,8 +1094,8 @@ h3 {
   z-index: 4;
   top: 50%;
   left: 50%;
-  width: 54%;
-  height: 54%;
+  width: 68%;
+  height: 68%;
   object-fit: contain;
   pointer-events: none;
   user-select: none;
@@ -1165,6 +1165,8 @@ h3 {
 }
 
 .legend-swatch-hit-icon {
+  width: 15px;
+  height: 15px;
   object-fit: contain;
   user-select: none;
 }
