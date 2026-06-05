@@ -1,11 +1,14 @@
 import { useEffect, useRef, useState } from "react";
+import type { ReactNode } from "react";
 
 import aircraftCarrierImage from "../../Images/Aircraft carrier.png";
 import anchorImage from "../../Images/Anchor.png";
 import artworkImage from "../../Images/Artwork.png";
 import battleshipImage from "../../Images/Battleship.png";
+import cannonImage from "../../Images/Cannon.png";
 import destroyerImage from "../../Images/Destroyer.png";
 import patrolBoatImage from "../../Images/Patrol boat.png";
+import sankShipImage from "../../Images/Sank ship.png";
 import submarineImage from "../../Images/Submarine.png";
 import timonImage from "../../Images/Timon.png";
 import {
@@ -22,7 +25,6 @@ import {
   watchGameEvents,
 } from "../utils/contract";
 import {
-  CELL_COUNT,
   SHIP_DEFINITIONS,
   buildBoardSecret,
   buildMerkleProof,
@@ -75,6 +77,11 @@ type CandidatePlacement = {
   blockedReason: string | null;
 };
 
+type ShipCellSegment = {
+  horizontal: boolean;
+  position: "start" | "middle" | "end";
+};
+
 const POLL_MS = 1000;
 const LOBBY_POLL_MS = 300;
 const PHASE_WAITING = 0;
@@ -86,7 +93,6 @@ const PHASE_AUDIT = 5;
 const PHASE_FINISHED = 6;
 const GAME_STARTING_DELAY_MS = 2000;
 const FIRST_ATTACK_ANNOUNCEMENT_MS = 2000;
-const BOARD_CELLS = Array.from({ length: CELL_COUNT }, (_, cell) => cell);
 const BOARD_COLUMNS = Array.from({ length: 10 }, (_, index) =>
   String.fromCharCode("A".charCodeAt(0) + index)
 );
@@ -100,6 +106,138 @@ const SHIP_IMAGES = {
   submarine: submarineImage,
   patrolBoat: patrolBoatImage,
 } satisfies Record<ShipDefinition["id"], string>;
+
+function boardCornerClass(rowIndex: number, columnIndex: number): string {
+  if (rowIndex === 0 && columnIndex === 1) return "board-cell-corner-top-left";
+  if (rowIndex === 0 && columnIndex === BOARD_COLUMNS.length) {
+    return "board-cell-corner-top-right";
+  }
+  if (rowIndex === BOARD_ROWS.length - 1 && columnIndex === 1) {
+    return "board-cell-corner-bottom-left";
+  }
+  if (rowIndex === BOARD_ROWS.length - 1 && columnIndex === BOARD_COLUMNS.length) {
+    return "board-cell-corner-bottom-right";
+  }
+
+  return "";
+}
+
+function renderLabeledBoardGrid(
+  renderCell: (cell: number, cornerClass: string) => ReactNode
+): ReactNode[] {
+  return SETUP_GRID_ITEMS.map((gridIndex) => {
+    if (gridIndex === 0) {
+      return (
+        <span
+          key="board-grid-corner"
+          className="setup-board-corner"
+          aria-hidden="true"
+        />
+      );
+    }
+
+    if (gridIndex <= BOARD_COLUMNS.length) {
+      const column = BOARD_COLUMNS[gridIndex - 1];
+
+      return (
+        <span
+          key={`board-grid-column-${column}`}
+          className="setup-board-column"
+          aria-hidden="true"
+        >
+          {column}
+        </span>
+      );
+    }
+
+    const bodyIndex = gridIndex - (BOARD_COLUMNS.length + 1);
+    const rowIndex = Math.floor(bodyIndex / (BOARD_COLUMNS.length + 1));
+    const columnIndex = bodyIndex % (BOARD_COLUMNS.length + 1);
+
+    if (columnIndex === 0) {
+      const row = BOARD_ROWS[rowIndex];
+
+      return (
+        <span
+          key={`board-grid-row-${row}`}
+          className="setup-board-row"
+          aria-hidden="true"
+        >
+          {row}
+        </span>
+      );
+    }
+
+    const cell = rowIndex * BOARD_COLUMNS.length + columnIndex - 1;
+
+    return renderCell(cell, boardCornerClass(rowIndex, columnIndex));
+  });
+}
+
+function savedShipPlacementsFor(
+  gameId: bigint,
+  playerAddress: string | null
+): PlacedShip[] {
+  if (!playerAddress) return [];
+
+  const boardSecret = loadBoardSecret(gameId, playerAddress);
+
+  if (!boardSecret?.shipStartCells || !boardSecret.shipHorizontal) return [];
+
+  try {
+    return SHIP_DEFINITIONS.map((ship, index) => {
+      const startCell = boardSecret.shipStartCells?.[index];
+      const horizontal = Boolean(boardSecret.shipHorizontal?.[index]);
+
+      if (startCell === undefined) {
+        throw new Error("Missing ship placement.");
+      }
+
+      return {
+        shipId: ship.id,
+        name: ship.name,
+        length: ship.length,
+        startCell,
+        horizontal,
+        cells: cellsForShipPlacement(startCell, ship.length, horizontal),
+      };
+    });
+  } catch {
+    return [];
+  }
+}
+
+function shipCellSegmentForCell(
+  ships: readonly Pick<PlacedShip, "cells" | "horizontal">[],
+  cell: number
+): ShipCellSegment | null {
+  for (const ship of ships) {
+    const index = ship.cells.indexOf(cell);
+
+    if (index === -1) continue;
+
+    return {
+      horizontal: ship.horizontal,
+      position:
+        index === 0 ? "start" : index === ship.cells.length - 1 ? "end" : "middle",
+    };
+  }
+
+  return null;
+}
+
+function renderShipCellPiece(segment: ShipCellSegment): ReactNode {
+  return (
+    <span
+      className={[
+        "ship-cell-piece",
+        segment.horizontal ? "ship-cell-piece-horizontal" : "ship-cell-piece-vertical",
+        `ship-cell-piece-${segment.position}`,
+      ].join(" ")}
+      aria-hidden="true"
+    />
+  );
+}
 
 function sameAddress(left: string | null, right: string): boolean {
   return Boolean(left && left.toLowerCase() === right.toLowerCase());
@@ -220,6 +358,9 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
   const [setupTimeoutError, setSetupTimeoutError] = useState("");
   const [savedShipCells, setSavedShipCells] = useState<number[]>(() =>
     playerAddress ? (loadBoardSecret(gameId, playerAddress)?.shipCells ?? []) : []
+  );
+  const [savedShipPlacements, setSavedShipPlacements] = useState<PlacedShip[]>(() =>
+    savedShipPlacementsFor(gameId, playerAddress)
   );
   const [randomRevealMessage, setRandomRevealMessage] = useState("");
   const [randomRevealError, setRandomRevealError] = useState("");
@@ -482,6 +623,8 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
       ? candidatePlacementForCell(hoveredBoardCell).cells
       : [];
   const ownShipCells = savedShipCells.length > 0 ? savedShipCells : placedShipCells;
+  const ownShipPlacements =
+    savedShipPlacements.length > 0 ? savedShipPlacements : placedShips;
 
   useEffect(() => {
     if (!boardSetupVisible || committingBoard || currentPlayerBoardCommitted) {
@@ -1342,6 +1485,7 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
 
       saveBoardSecret(boardSecret);
       setSavedShipCells(boardSecret.shipCells);
+      setSavedShipPlacements([...nextPlacedShips]);
       devLog("gameWindow:boardCommit:prepared", {
         gameId,
         windowPlayerAddress: playerAddress,
@@ -1501,13 +1645,45 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
     }
   }
 
-  async function handleAttackCellClick(cell: number) {
-    if (attackingCell !== null) return;
+  function handleAttackCellClick(cell: number) {
+    if (attackingCell !== null || cellRevealPhaseVisible) return;
+
+    const existingResult = shotResultForBoard(shotResults, opponentAddress, cell);
+
+    if (existingResult) return;
 
     setSelectedAttackCell(cell);
     setAttackMessage("");
     setAttackError("");
-    devLog("gameWindow:attack:cellClick", {
+    devLog("gameWindow:attack:cellSelect", {
+      gameId,
+      windowPlayerAddress: playerAddress,
+      cell,
+      label: cellLabel(cell),
+    });
+  }
+
+  async function handleConfirmAttackClick() {
+    if (attackingCell !== null) return;
+
+    if (selectedAttackCell === null) {
+      setAttackMessage("");
+      setAttackError("Select a cell before confirming your shot.");
+      return;
+    }
+
+    const cell = selectedAttackCell;
+    const existingResult = shotResultForBoard(shotResults, opponentAddress, cell);
+
+    if (existingResult) {
+      setAttackMessage("");
+      setAttackError(`${cellLabel(cell)} has already been attacked.`);
+      return;
+    }
+
+    setAttackMessage("");
+    setAttackError("");
+    devLog("gameWindow:attack:confirmClick", {
       gameId,
       windowPlayerAddress: playerAddress,
       cell,
@@ -1684,15 +1860,18 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
 
   function boardCellClass({
     baseClass,
+    cornerClass,
     result,
     targeted,
   }: {
     baseClass: string;
+    cornerClass?: string;
     result: ShotResult | null;
     targeted: boolean;
   }): string {
     return [
       "board-cell",
+      cornerClass ?? "",
       baseClass,
       targeted ? "board-cell-targeted" : "",
       result?.hit ? "board-cell-hit" : "",
@@ -1702,95 +1881,281 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
       .join(" ");
   }
 
-  function boardCellText(result: ShotResult | null, cell: number): string {
-    if (!result) return cellLabel(cell);
+  function boardCellAriaLabel(prefix: string, cell: number, result: ShotResult | null) {
+    const outcome = result ? ` ${result.hit ? "hit" : "miss"}` : "";
 
-    return result.hit ? "HIT" : "MISS";
+    return `${prefix} ${cellLabel(cell)}${outcome}`;
   }
 
   if (combatPhaseVisible) {
     if (currentPlayerIsAttacker) {
+      const selectedAttackResult =
+        selectedAttackCell !== null
+          ? shotResultForBoard(shotResults, opponentAddress, selectedAttackCell)
+          : null;
+      const confirmShotDisabled =
+        !attackPhaseVisible ||
+        attackingCell !== null ||
+        selectedAttackCell === null ||
+        selectedAttackResult !== null;
+
       return (
-        <main className="page game-window-page">
-          <section className="card game-window-card combat-window-card">
-            <DeadlineTimer gameState={gameState} nowMs={nowMs} />
-            <h1>Attack</h1>
+        <main className="page game-window-page board-setup-page combat-page">
+          <section className="card game-window-card board-setup-card combat-window-card">
+            <div className="board-setup-shell combat-shell">
+              <div className="board-setup-topbar">
+                <div className="board-setup-titlemark combat-titlemark">
+                  <img
+                    src={cannonImage}
+                    alt=""
+                    className="cannon-mark"
+                    aria-hidden="true"
+                    draggable={false}
+                  />
+                  <span>Your Turn</span>
+                </div>
+                <DeadlineTimer
+                  gameState={gameState}
+                  iconSrc={timonImage}
+                  nowMs={nowMs}
+                />
+              </div>
 
-            <div className="fleet-board attack-board" aria-label="Enemy board">
-              {BOARD_CELLS.map((cell) => {
-                const result = shotResultForBoard(shotResults, opponentAddress, cell);
-                const targeted =
-                  selectedAttackCell === cell ||
-                  (cellRevealPhaseVisible && gameState?.pendingTarget === cell);
+              <div className="board-setup-hero combat-hero">
+                <div>
+                  <p className="eyebrow">Attack Phase</p>
+                  <h1>Choose your target</h1>
+                  <p className="combat-copy">
+                    Select a cell to fire at your opponent&apos;s fleet.
+                  </p>
+                </div>
+                <div className="combat-artwork combat-artwork-attack" aria-hidden="true">
+                  <img src={artworkImage} alt="" draggable={false} />
+                </div>
+              </div>
 
-                return (
-                  <button
-                    key={cell}
-                    type="button"
-                    className={boardCellClass({
-                      baseClass: "board-cell-attackable",
-                      result,
-                      targeted: targeted && !result,
-                    })}
-                    onClick={() => handleAttackCellClick(cell)}
-                    disabled={attackingCell !== null || cellRevealPhaseVisible}
-                    aria-label={`Attack ${cellLabel(cell)}`}
-                  >
-                    {boardCellText(result, cell)}
-                  </button>
-                );
-              })}
+              <div
+                className="setup-board-frame combat-board-frame"
+                aria-label="Enemy board"
+              >
+                <div className="setup-board-grid combat-board-grid">
+                  {renderLabeledBoardGrid((cell, cornerClass) => {
+                    const result = shotResultForBoard(
+                      shotResults,
+                      opponentAddress,
+                      cell
+                    );
+                    const targeted =
+                      selectedAttackCell === cell ||
+                      (cellRevealPhaseVisible && gameState?.pendingTarget === cell);
+
+                    return (
+                      <button
+                        key={`attack-cell-${cell}`}
+                        type="button"
+                        className={boardCellClass({
+                          baseClass: "board-cell-attackable",
+                          cornerClass,
+                          result,
+                          targeted: targeted && !result,
+                        })}
+                        onClick={() => handleAttackCellClick(cell)}
+                        disabled={attackingCell !== null || cellRevealPhaseVisible}
+                        aria-label={boardCellAriaLabel("Attack", cell, result)}
+                      >
+                        {result?.hit ? (
+                          <img
+                            src={sankShipImage}
+                            alt=""
+                            className="hit-cell-fire"
+                            aria-hidden="true"
+                            draggable={false}
+                          />
+                        ) : (
+                          <span className="board-cell-dot" aria-hidden="true" />
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="combat-actions combat-actions-attack">
+                <div className="shots-remaining">
+                  <span className="shot-mark" aria-hidden="true" />
+                  <span>1 of 1 shots remaining</span>
+                </div>
+                <button
+                  type="button"
+                  className="confirm-shot-button"
+                  onClick={() => {
+                    handleConfirmAttackClick().catch((error) => {
+                      setAttackError(
+                        error instanceof Error ? error.message : "Attack failed."
+                      );
+                    });
+                  }}
+                  disabled={confirmShotDisabled}
+                >
+                  {attackingCell !== null ? "Confirming..." : "Confirm Shot"}
+                </button>
+              </div>
+
+              <div className="board-setup-footer combat-footer">
+                <div className="combat-footer-status">
+                  <img
+                    src={cannonImage}
+                    alt=""
+                    className="cannon-mark cannon-mark-small"
+                    aria-hidden="true"
+                    draggable={false}
+                  />
+                  <span className="label">Your Turn</span>
+                  <span className="combat-footer-copy">Fire at a cell to attack</span>
+                </div>
+                <span className="target-mark" aria-hidden="true" />
+              </div>
+
+              {attackMessage && <div className="success">{attackMessage}</div>}
+              {attackError && <div className="warning">{attackError}</div>}
+              {phaseTimeoutMessage && (
+                <div className="success">{phaseTimeoutMessage}</div>
+              )}
+              {phaseTimeoutError && (
+                <div className="warning">{phaseTimeoutError}</div>
+              )}
             </div>
-
-            {attackMessage && <div className="success">{attackMessage}</div>}
-            {attackError && <div className="warning">{attackError}</div>}
-            {phaseTimeoutMessage && (
-              <div className="success">{phaseTimeoutMessage}</div>
-            )}
-            {phaseTimeoutError && (
-              <div className="warning">{phaseTimeoutError}</div>
-            )}
           </section>
         </main>
       );
     }
 
     return (
-      <main className="page game-window-page">
-        <section className="card game-window-card combat-window-card">
-          <DeadlineTimer gameState={gameState} nowMs={nowMs} />
-          <h1>Waiting to be attacked</h1>
+      <main className="page game-window-page board-setup-page combat-page">
+        <section className="card game-window-card board-setup-card combat-window-card">
+          <div className="board-setup-shell combat-shell">
+            <div className="board-setup-topbar">
+              <div className="board-setup-titlemark combat-titlemark">
+                <img
+                  src={anchorImage}
+                  alt=""
+                  className="anchor-mark"
+                  aria-hidden="true"
+                  draggable={false}
+                />
+                <span>Opponent&apos;s Turn</span>
+              </div>
+              <DeadlineTimer
+                gameState={gameState}
+                iconSrc={timonImage}
+                nowMs={nowMs}
+              />
+            </div>
 
-          <div className="fleet-board own-board" aria-label="Your board">
-            {BOARD_CELLS.map((cell) => {
-              const result = shotResultForBoard(shotResults, playerAddress, cell);
-              const targeted =
-                cellRevealPhaseVisible && gameState?.pendingTarget === cell;
+            <div className="board-setup-hero combat-hero">
+              <div>
+                <p className="eyebrow">Enemy Attack</p>
+                <h1>Enemy is firing</h1>
+                <p className="combat-copy">Defend your fleet. Their shot is incoming.</p>
+              </div>
+              <div className="combat-artwork" aria-hidden="true">
+                <img src={artworkImage} alt="" draggable={false} />
+              </div>
+            </div>
 
-              return (
-                <div
-                  key={cell}
-                  className={boardCellClass({
-                    baseClass: [
-                      "board-cell-readonly",
-                      ownShipCells.includes(cell) ? "board-cell-selected" : "",
-                    ]
-                      .filter(Boolean)
-                      .join(" "),
-                    result,
-                    targeted: targeted && !result,
-                  })}
-                  aria-label={`Cell ${cellLabel(cell)}`}
-                >
-                  {boardCellText(result, cell)}
-                </div>
-              );
-            })}
+            <div
+              className="setup-board-frame combat-board-frame"
+              aria-label="Your board"
+            >
+              <div className="setup-board-grid combat-board-grid">
+                {renderLabeledBoardGrid((cell, cornerClass) => {
+                  const result = shotResultForBoard(shotResults, playerAddress, cell);
+                  const ownShipSegment = shipCellSegmentForCell(
+                    ownShipPlacements,
+                    cell
+                  );
+                  const targeted =
+                    cellRevealPhaseVisible && gameState?.pendingTarget === cell;
+
+                  return (
+                    <div
+                      key={`defense-cell-${cell}`}
+                      className={boardCellClass({
+                        baseClass: [
+                          "board-cell-readonly",
+                          ownShipCells.includes(cell) ? "board-cell-selected" : "",
+                          ownShipSegment ? "board-cell-ship-piece-cell" : "",
+                        ]
+                          .filter(Boolean)
+                          .join(" "),
+                        cornerClass,
+                        result,
+                        targeted: targeted && !result,
+                      })}
+                      aria-label={boardCellAriaLabel("Cell", cell, result)}
+                    >
+                      {result?.hit ? (
+                        <>
+                          {ownShipSegment && renderShipCellPiece(ownShipSegment)}
+                          <img
+                            src={sankShipImage}
+                            alt=""
+                            className="hit-cell-fire"
+                            aria-hidden="true"
+                            draggable={false}
+                          />
+                        </>
+                      ) : ownShipSegment ? (
+                        renderShipCellPiece(ownShipSegment)
+                      ) : (
+                        <span className="board-cell-dot" aria-hidden="true" />
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="setup-board-legend combat-legend" aria-hidden="true">
+              <span>
+                <i className="legend-swatch legend-swatch-placed" />
+                Your ships
+              </span>
+              <span>
+                <img
+                  src={sankShipImage}
+                  alt=""
+                  className="legend-swatch legend-swatch-hit-icon"
+                  draggable={false}
+                />
+                Hit
+              </span>
+              <span>
+                <i className="legend-swatch legend-swatch-miss" />
+                Miss
+              </span>
+            </div>
+
+            <div className="board-setup-footer combat-footer">
+              <div className="combat-footer-status">
+                <img
+                  src={anchorImage}
+                  alt=""
+                  className="anchor-mark anchor-mark-small"
+                  aria-hidden="true"
+                  draggable={false}
+                />
+                <span className="label">Waiting for opponent</span>
+                <span className="combat-footer-copy">Defend your fleet</span>
+              </div>
+              <span className="shield-mark" aria-hidden="true" />
+            </div>
+
+            {phaseTimeoutMessage && (
+              <div className="success">{phaseTimeoutMessage}</div>
+            )}
+            {phaseTimeoutError && <div className="warning">{phaseTimeoutError}</div>}
           </div>
-          {phaseTimeoutMessage && (
-            <div className="success">{phaseTimeoutMessage}</div>
-          )}
-          {phaseTimeoutError && <div className="warning">{phaseTimeoutError}</div>}
         </section>
       </main>
     );
@@ -1921,6 +2286,7 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
 
                   const cell = rowIndex * BOARD_COLUMNS.length + columnIndex - 1;
                   const placed = placedShipCells.includes(cell);
+                  const placedSegment = shipCellSegmentForCell(placedShips, cell);
                   const candidatePlacement = candidatePlacementForCell(cell);
                   const preview =
                     !placed &&
@@ -1953,6 +2319,7 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
                         "board-cell",
                         cornerClass,
                         placed ? "board-cell-selected" : "",
+                        placedSegment ? "board-cell-ship-piece-cell" : "",
                         preview ? "board-cell-preview" : "",
                         previewOrigin ? "board-cell-preview-origin" : "",
                         blocked ? "board-cell-blocked" : "",
@@ -1966,7 +2333,11 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
                       aria-disabled={placementBlocked}
                       aria-label={`Cell ${cellLabel(cell)}`}
                     >
-                      <span className="board-cell-dot" aria-hidden="true" />
+                      {placedSegment ? (
+                        renderShipCellPiece(placedSegment)
+                      ) : (
+                        <span className="board-cell-dot" aria-hidden="true" />
+                      )}
                     </button>
                   );
                 })}

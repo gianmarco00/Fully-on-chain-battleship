@@ -2,7 +2,8 @@ import { defineChain } from "viem";
 
 export const UZHETH_CHAIN_ID_DECIMAL = 70207;
 export const UZHETH_CHAIN_ID_HEX = "0x1123f";
-export const UZHETH_RPC_URL = "http://127.0.0.1:8549";
+export const UZHETH_RPC_URL =
+  import.meta.env.VITE_UZHETH_RPC_URL ?? "http://130.60.144.77:8554/";
 
 export const UZHETH_NETWORK = {
   chainId: UZHETH_CHAIN_ID_HEX,
