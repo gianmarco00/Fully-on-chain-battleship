@@ -1,16 +1,24 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 
 import aircraftCarrierImage from "../../Images/Aircraft carrier.png";
 import anchorImage from "../../Images/Anchor.png";
+import auditShipImage from "../../Images/audit ship.png";
 import artworkImage from "../../Images/Artwork.png";
 import battleshipImage from "../../Images/Battleship.png";
 import cannonImage from "../../Images/Cannon.png";
+import coinImage from "../../Images/Coin.png";
 import destroyerImage from "../../Images/Destroyer.png";
+import lighthouseImage from "../../Images/Lighthouse.png";
+import loosingShipImage from "../../Images/loosing ship.png";
 import patrolBoatImage from "../../Images/Patrol boat.png";
+import readStateIcon from "../../Images/Read state.svg";
 import sankShipImage from "../../Images/Sank ship.png";
+import sendInviteImage from "../../Images/Send invite.png";
+import shieldImage from "../../Images/shield.svg";
 import submarineImage from "../../Images/Submarine.png";
 import timonImage from "../../Images/Timon.png";
+import winningShipImage from "../../Images/winning ship.png";
 import {
   attackCell,
   claimTimeout,
@@ -82,8 +90,14 @@ type ShipCellSegment = {
   position: "start" | "middle" | "end";
 };
 
+type ResultRevealView = {
+  key: string;
+  state: BattleshipGameState;
+};
+
 const POLL_MS = 1000;
 const LOBBY_POLL_MS = 300;
+const RESULT_REVEAL_VIEW_MS = 3000;
 const PHASE_WAITING = 0;
 const PHASE_BOARD_SETUP = 1;
 const PHASE_RANDOM_REVEAL = 2;
@@ -285,6 +299,15 @@ function buildLobbyView(
   };
 }
 
+function resultRevealKey(state: BattleshipGameState): string {
+  return [
+    state.gameId.toString(),
+    state.currentAttacker.toLowerCase(),
+    state.pendingTarget,
+    state.actionDeadline.toString(),
+  ].join(":");
+}
+
 function formatCountdown(seconds: number): string {
   const safeSeconds = Math.max(seconds, 0);
   const minutes = Math.floor(safeSeconds / 60);
@@ -378,9 +401,14 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
   const [shotResults, setShotResults] = useState<ShotResult[]>(() =>
     loadShotResults(gameId)
   );
+  const [resultRevealView, setResultRevealView] = useState<ResultRevealView | null>(
+    null
+  );
   const [nowMs, setNowMs] = useState(() => Date.now());
+  const latestGameStateRef = useRef<BattleshipGameState | null>(null);
   const lastStateKey = useRef<string | null>(null);
   const latestPhase = useRef<number | null>(null);
+  const resultRevealTimeoutId = useRef<number | null>(null);
   const autoSetupTimeoutClaimKeys = useRef<Set<string>>(new Set());
   const autoPhaseTimeoutClaimKeys = useRef<Set<string>>(new Set());
   const autoRandomRevealKeys = useRef<Set<string>>(new Set());
@@ -388,6 +416,61 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
   const firstAttackAnnouncementTimeoutId = useRef<number | null>(null);
   const autoRevealKeys = useRef<Set<string>>(new Set());
   const autoAuditKeys = useRef<Set<string>>(new Set());
+
+  const scheduleResultRevealView = useCallback(
+    (revealState: BattleshipGameState) => {
+      const key = resultRevealKey(revealState);
+
+      if (resultRevealTimeoutId.current !== null) {
+        window.clearTimeout(resultRevealTimeoutId.current);
+      }
+
+      setResultRevealView({ key, state: revealState });
+
+      resultRevealTimeoutId.current = window.setTimeout(() => {
+        setResultRevealView((currentView) =>
+          currentView?.key === key ? null : currentView
+        );
+        resultRevealTimeoutId.current = null;
+
+        devLog("gameWindow:resultReveal:hidden", {
+          gameId,
+          windowPlayerAddress: playerAddress,
+          key,
+        });
+      }, RESULT_REVEAL_VIEW_MS);
+
+      devLog("gameWindow:resultReveal:visible", {
+        gameId,
+        windowPlayerAddress: playerAddress,
+        key,
+        cell: revealState.pendingTarget,
+        label: cellLabel(revealState.pendingTarget),
+        previousAttacker: revealState.currentAttacker,
+        durationMs: RESULT_REVEAL_VIEW_MS,
+      });
+    },
+    [gameId, playerAddress]
+  );
+
+  const applyGameState = useCallback(
+    (nextState: BattleshipGameState) => {
+      const previousState = latestGameStateRef.current;
+
+      latestGameStateRef.current = nextState;
+      latestPhase.current = nextState.phase;
+
+      if (
+        previousState?.phase === PHASE_CELL_REVEAL &&
+        nextState.phase === PHASE_ATTACK
+      ) {
+        scheduleResultRevealView(previousState);
+      }
+
+      setGameState(nextState);
+    },
+    [scheduleResultRevealView]
+  );
 
   useEffect(() => {
     const intervalId = window.setInterval(() => {
@@ -420,7 +503,7 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
         if (!alive) return;
 
         latestPhase.current = state.phase;
-        setGameState(state);
+        applyGameState(state);
         setLobbyView(nextLobbyView);
 
         const nextStateKey = gameStateKey(state);
@@ -522,7 +605,7 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
       document.removeEventListener("visibilitychange", refreshWhenVisible);
       stopWatchingEvents();
     };
-  }, [gameId, playerAddress]);
+  }, [applyGameState, gameId, playerAddress]);
 
   const gameStarting =
     gameState?.phase === PHASE_BOARD_SETUP && !isZeroAddress(gameState.player2);
@@ -550,7 +633,6 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
   const activePhaseName = gameState?.phaseName ?? "";
   const activeActionDeadline = gameState?.actionDeadline ?? 0n;
   const activeCurrentAttacker = gameState?.currentAttacker ?? "";
-  const combatPhaseVisible = attackPhaseVisible || cellRevealPhaseVisible;
   const currentPlayerIsAttacker = Boolean(
     gameState && sameAddress(playerAddress, gameState.currentAttacker)
   );
@@ -567,7 +649,25 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
     gameState && currentRole === "player1"
       ? gameState.player2
       : gameState && currentRole === "player2"
-        ? gameState.player1
+      ? gameState.player1
+      : null;
+  const combatGameState = resultRevealView?.state ?? gameState;
+  const combatCurrentRole = combatGameState
+    ? playerRole(combatGameState, playerAddress)
+    : null;
+  const combatAttackPhaseVisible = combatGameState?.phase === PHASE_ATTACK;
+  const combatCellRevealPhaseVisible =
+    combatGameState?.phase === PHASE_CELL_REVEAL;
+  const combatPhaseVisible =
+    combatAttackPhaseVisible || combatCellRevealPhaseVisible;
+  const combatCurrentPlayerIsAttacker = Boolean(
+    combatGameState && sameAddress(playerAddress, combatGameState.currentAttacker)
+  );
+  const combatOpponentAddress =
+    combatGameState && combatCurrentRole === "player1"
+      ? combatGameState.player2
+      : combatGameState && combatCurrentRole === "player2"
+        ? combatGameState.player1
         : null;
   const firstAttackAnnouncementAttacker = gameState?.currentAttacker ?? "";
   const firstAttackAnnouncementNoShots = Boolean(
@@ -625,6 +725,14 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
   const ownShipCells = savedShipCells.length > 0 ? savedShipCells : placedShipCells;
   const ownShipPlacements =
     savedShipPlacements.length > 0 ? savedShipPlacements : placedShips;
+
+  function handleCopyGameId() {
+    if (!navigator.clipboard) return;
+
+    navigator.clipboard.writeText(gameId.toString()).catch((error) => {
+      devLog("gameWindow:waiting:copyGameId:error", { gameId, error });
+    });
+  }
 
   useEffect(() => {
     if (!boardSetupVisible || committingBoard || currentPlayerBoardCommitted) {
@@ -752,7 +860,7 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
 
           await waitForTransaction(txHash);
           const refreshedState = await loadGameState(gameId);
-          setGameState(refreshedState);
+          applyGameState(refreshedState);
 
           const claimedWin =
             refreshedState.phase === PHASE_FINISHED &&
@@ -793,6 +901,7 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
   }, [
     activeActionDeadline,
     activePhase,
+    applyGameState,
     currentPlayerBoardCommitted,
     currentRole,
     gameId,
@@ -873,7 +982,7 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
 
           await waitForTransaction(txHash);
           const refreshedState = await loadGameState(gameId);
-          setGameState(refreshedState);
+          applyGameState(refreshedState);
 
           const claimedWin =
             refreshedState.phase === PHASE_FINISHED &&
@@ -917,6 +1026,7 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
     activeCurrentAttacker,
     activePhase,
     activePhaseName,
+    applyGameState,
     currentPlayerCanClaimTurnTimeout,
     currentRole,
     gameId,
@@ -998,7 +1108,7 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
 
         if (cancelled) return;
 
-        setGameState(refreshedState);
+        applyGameState(refreshedState);
         setRandomRevealMessage("");
         setRandomRevealError("");
 
@@ -1033,6 +1143,7 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
       cancelled = true;
     };
   }, [
+    applyGameState,
     currentRole,
     gameId,
     gameState,
@@ -1091,6 +1202,14 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
     return () => {
       if (firstAttackAnnouncementTimeoutId.current !== null) {
         window.clearTimeout(firstAttackAnnouncementTimeoutId.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (resultRevealTimeoutId.current !== null) {
+        window.clearTimeout(resultRevealTimeoutId.current);
       }
     };
   }, []);
@@ -1208,7 +1327,7 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
         if (cancelled) return;
 
         setShotResults(nextShotResults);
-        setGameState(refreshedState);
+        applyGameState(refreshedState);
         setAttackMessage("");
         setAttackError("");
 
@@ -1239,6 +1358,7 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
       cancelled = true;
     };
   }, [
+    applyGameState,
     cellRevealPhaseVisible,
     currentPlayerIsAttacker,
     currentRole,
@@ -1361,7 +1481,7 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
 
         if (cancelled) return;
 
-        setGameState(refreshedState);
+        applyGameState(refreshedState);
         setAuditMessage("");
 
         const finished = refreshedState.phase === PHASE_FINISHED;
@@ -1398,6 +1518,7 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
       cancelled = true;
     };
   }, [
+    applyGameState,
     auditPhaseVisible,
     currentPlayerIsProvisionalWinner,
     currentRole,
@@ -1532,7 +1653,7 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
       }
 
       const refreshedState = await loadGameState(gameId);
-      setGameState(refreshedState);
+      applyGameState(refreshedState);
       setBoardCommitMessage("Board committed successfully.");
     } catch (error) {
       setBoardCommitMessage("");
@@ -1757,7 +1878,7 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
       await waitForTransaction(txHash);
 
       const refreshedState = await loadGameState(gameId);
-      setGameState(refreshedState);
+      applyGameState(refreshedState);
 
       const registered =
         refreshedState.phase === PHASE_CELL_REVEAL &&
@@ -1799,20 +1920,85 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
   if (gameStarting && !boardSetupVisible) {
     return (
       <main className="page game-window-page">
-        <section className="card game-window-card game-starting-card">
-          <DeadlineTimer gameState={gameState} nowMs={nowMs} />
-          <h1>Game Starting...</h1>
+        <section className="card game-window-card game-starting-card game-starting-loading-card">
+          <h1>Game is starting</h1>
+          <p>Preparing the battlefield</p>
+          <img
+            src={timonImage}
+            alt=""
+            className="game-starting-loader"
+            aria-hidden="true"
+            draggable={false}
+          />
         </section>
       </main>
     );
   }
 
   if (finishedPhaseVisible) {
+    const resultArtworkImage = currentPlayerWon ? winningShipImage : loosingShipImage;
+    const resultTitle = currentPlayerWon ? "You win!" : "You lose";
+    const resultCopy = currentPlayerWon
+      ? "Well played, Captain. Your strategy leads you to victory."
+      : "The sea can be unforgiving. Better luck next time, Captain.";
+    const resultStatusTitle = currentPlayerWon
+      ? "Victory confirmed"
+      : "Defeat confirmed";
+    const resultCalloutTitle = currentPlayerWon ? "Great victory!" : "Keep sailing!";
+    const resultCalloutCopy = currentPlayerWon
+      ? "Every move counts. Ready for the next battle?"
+      : "Analyze, adapt, and come back stronger.";
+
     return (
-      <main className="page game-window-page">
-        <section className="card game-window-card game-result-card">
-          <DeadlineTimer gameState={gameState} nowMs={nowMs} />
-          <h1>{currentPlayerWon ? "You win" : "You loose"}</h1>
+      <main className="page game-window-page game-result-page">
+        <section
+          className={[
+            "card game-window-card game-result-card",
+            currentPlayerWon ? "game-result-card-win" : "game-result-card-loss",
+          ].join(" ")}
+        >
+          <p className="eyebrow game-result-eyebrow">Game {gameId.toString()}</p>
+          <h1>{resultTitle}</h1>
+          <p className="game-result-copy">{resultCopy}</p>
+
+          <img
+            src={resultArtworkImage}
+            alt=""
+            className="game-result-artwork"
+            aria-hidden="true"
+            draggable={false}
+          />
+
+          <section className="game-result-confirmation">
+            <strong>{resultStatusTitle}</strong>
+            <span>The audit is complete and the result is final.</span>
+          </section>
+
+          <section className="game-result-detail" aria-label="Game details">
+            <span>Game ID</span>
+            <strong>{gameId.toString()}</strong>
+          </section>
+
+          <section className="game-result-callout">
+            <img
+              src={currentPlayerWon ? timonImage : anchorImage}
+              alt=""
+              aria-hidden="true"
+              draggable={false}
+            />
+            <span>
+              <strong>{resultCalloutTitle}</strong>
+              <span>{resultCalloutCopy}</span>
+            </span>
+          </section>
+
+          <button
+            type="button"
+            className="game-result-back-button"
+            onClick={() => window.close()}
+          >
+            Back to Lobby
+          </button>
         </section>
       </main>
     );
@@ -1820,14 +2006,88 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
 
   if (auditPhaseVisible) {
     return (
-      <main className="page game-window-page">
-        <section className="card game-window-card combat-window-card">
-          <DeadlineTimer gameState={gameState} nowMs={nowMs} />
-          <h1>
-            {currentPlayerIsProvisionalWinner ? "Auditing board" : "Waiting for audit"}
-          </h1>
-          {auditMessage && <div className="success">{auditMessage}</div>}
-          {auditError && <div className="warning">{auditError}</div>}
+      <main className="page game-window-page audit-phase-page">
+        <section className="card game-window-card audit-phase-card">
+          <img
+            src={auditShipImage}
+            alt=""
+            className="audit-hero-artwork"
+            aria-hidden="true"
+            draggable={false}
+          />
+
+          <p className="eyebrow audit-eyebrow">Audit Phase</p>
+          <h1>Board under audit</h1>
+          <p className="audit-phase-copy">
+            The provisional winner has submitted their board.
+            <span>It is now being verified for fraud or cheating.</span>
+          </p>
+
+          <section className="audit-progress-panel" aria-label="Audit progress">
+            <div className="audit-step audit-step-complete">
+              <span className="audit-step-icon">
+                <img
+                  src={sendInviteImage}
+                  alt=""
+                  aria-hidden="true"
+                  draggable={false}
+                />
+              </span>
+              <span className="audit-step-copy">
+                <strong>Board submitted</strong>
+                <span>Provisional winner has locked in their board.</span>
+              </span>
+              <span className="audit-status-check" aria-hidden="true" />
+            </div>
+
+            <div className="audit-step audit-step-active">
+              <span className="audit-step-icon">
+                <svg
+                  className="audit-step-lens"
+                  viewBox="0 0 24 24"
+                  aria-hidden="true"
+                  focusable="false"
+                >
+                  <circle cx="10.5" cy="10.5" r="5.5" />
+                  <path d="M15 15l5 5" />
+                </svg>
+              </span>
+              <span className="audit-step-copy">
+                <strong>Board under audit</strong>
+                <span>Verifying the board on-chain...</span>
+              </span>
+              <span className="audit-status-spinner" aria-hidden="true" />
+            </div>
+
+            <div className="audit-step">
+              <span className="audit-step-icon">
+                <img
+                  src={shieldImage}
+                  alt=""
+                  aria-hidden="true"
+                  draggable={false}
+                />
+              </span>
+              <span className="audit-step-copy">
+                <strong>Finalizing result</strong>
+                <span>Once verified, the game result will be final.</span>
+              </span>
+              <span className="audit-status-pending" aria-hidden="true" />
+            </div>
+          </section>
+
+          <section className="audit-info-band">
+            <span className="audit-info-icon">
+              <img src={anchorImage} alt="" aria-hidden="true" draggable={false} />
+            </span>
+            <span>
+              <strong>This helps keep the game fair.</strong>
+              <span>All game data is stored on-chain and transparently verified.</span>
+            </span>
+          </section>
+
+          {auditMessage && <div className="success audit-phase-notice">{auditMessage}</div>}
+          {auditError && <div className="warning audit-phase-notice">{auditError}</div>}
         </section>
       </main>
     );
@@ -1836,9 +2096,47 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
   if (randomRevealPhaseVisible) {
     return (
       <main className="page game-window-page">
-        <section className="card game-window-card game-starting-card">
-          <DeadlineTimer gameState={gameState} nowMs={nowMs} />
-          <h1>Choosing first player...</h1>
+        <section className="card game-window-card game-starting-card coin-toss-card">
+          <img
+            src={artworkImage}
+            alt=""
+            className="coin-toss-artwork"
+            aria-hidden="true"
+            draggable={false}
+          />
+          <h1>Coin toss</h1>
+          <p>
+            We&apos;re flipping a coin to decide who plays first.
+            <span>This is provably random and fair.</span>
+          </p>
+          <img
+            src={coinImage}
+            alt=""
+            className="coin-toss-image"
+            aria-hidden="true"
+            draggable={false}
+          />
+          <div className="coin-toss-status">
+            <img
+              src={timonImage}
+              alt=""
+              aria-hidden="true"
+              draggable={false}
+            />
+            <span>Flipping the coin...</span>
+          </div>
+          <div className="coin-toss-fairness">
+            <img
+              src={shieldImage}
+              alt=""
+              aria-hidden="true"
+              draggable={false}
+            />
+            <span>
+              <strong>Provably Fair</strong>
+              The result is generated using verifiable on-chain randomness.
+            </span>
+          </div>
           {randomRevealMessage && <div className="success">{randomRevealMessage}</div>}
           {randomRevealError && <div className="warning">{randomRevealError}</div>}
         </section>
@@ -1849,10 +2147,16 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
   if (firstAttackAnnouncementVisible) {
     return (
       <main className="page game-window-page">
-        <section className="card game-window-card game-starting-card">
-          <h1>
-            {currentPlayerIsAttacker ? "You move first" : "Prepare to be attacked"}
-          </h1>
+        <section className="card game-window-card game-starting-card first-player-card">
+          <img
+            src={artworkImage}
+            alt=""
+            className="first-player-artwork"
+            aria-hidden="true"
+            draggable={false}
+          />
+          <h1>{currentPlayerIsAttacker ? "You play first" : "You play second"}</h1>
+          <p>Good luck, admiral.</p>
         </section>
       </main>
     );
@@ -1887,14 +2191,34 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
     return `${prefix} ${cellLabel(cell)}${outcome}`;
   }
 
-  if (combatPhaseVisible) {
-    if (currentPlayerIsAttacker) {
+  if (combatPhaseVisible && combatGameState) {
+    const resultRevealShotResult = resultRevealView
+      ? shotResultForBoard(
+          shotResults,
+          combatCurrentPlayerIsAttacker ? combatOpponentAddress : playerAddress,
+          resultRevealView.state.pendingTarget
+        )
+      : null;
+    const resultRevealMessage =
+      resultRevealView && resultRevealShotResult
+        ? resultRevealShotResult.hit
+          ? combatCurrentPlayerIsAttacker
+            ? "Shot successfull!"
+            : "You have been Hit!"
+          : "Miss!"
+        : null;
+    const defenderHitReveal =
+      Boolean(resultRevealView && resultRevealShotResult?.hit) &&
+      !combatCurrentPlayerIsAttacker;
+
+    if (combatCurrentPlayerIsAttacker) {
       const selectedAttackResult =
         selectedAttackCell !== null
-          ? shotResultForBoard(shotResults, opponentAddress, selectedAttackCell)
+          ? shotResultForBoard(shotResults, combatOpponentAddress, selectedAttackCell)
           : null;
       const confirmShotDisabled =
-        !attackPhaseVisible ||
+        !combatAttackPhaseVisible ||
+        resultRevealView !== null ||
         attackingCell !== null ||
         selectedAttackCell === null ||
         selectedAttackResult !== null;
@@ -1915,7 +2239,7 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
                   <span>Your Turn</span>
                 </div>
                 <DeadlineTimer
-                  gameState={gameState}
+                  gameState={combatGameState}
                   iconSrc={timonImage}
                   nowMs={nowMs}
                 />
@@ -1942,12 +2266,13 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
                   {renderLabeledBoardGrid((cell, cornerClass) => {
                     const result = shotResultForBoard(
                       shotResults,
-                      opponentAddress,
+                      combatOpponentAddress,
                       cell
                     );
                     const targeted =
                       selectedAttackCell === cell ||
-                      (cellRevealPhaseVisible && gameState?.pendingTarget === cell);
+                      (combatCellRevealPhaseVisible &&
+                        combatGameState.pendingTarget === cell);
 
                     return (
                       <button
@@ -1960,7 +2285,11 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
                           targeted: targeted && !result,
                         })}
                         onClick={() => handleAttackCellClick(cell)}
-                        disabled={attackingCell !== null || cellRevealPhaseVisible}
+                        disabled={
+                          attackingCell !== null ||
+                          combatCellRevealPhaseVisible ||
+                          resultRevealView !== null
+                        }
                         aria-label={boardCellAriaLabel("Attack", cell, result)}
                       >
                         {result?.hit ? (
@@ -1978,6 +2307,11 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
                     );
                   })}
                 </div>
+                {resultRevealMessage && (
+                  <div className="combat-result-overlay" aria-live="polite">
+                    <span>{resultRevealMessage}</span>
+                  </div>
+                )}
               </div>
 
               <div className="combat-actions combat-actions-attack">
@@ -2031,7 +2365,14 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
     }
 
     return (
-      <main className="page game-window-page board-setup-page combat-page">
+      <main
+        className={[
+          "page game-window-page board-setup-page combat-page",
+          defenderHitReveal ? "combat-page-defender-hit" : "",
+        ]
+          .filter(Boolean)
+          .join(" ")}
+      >
         <section className="card game-window-card board-setup-card combat-window-card">
           <div className="board-setup-shell combat-shell">
             <div className="board-setup-topbar">
@@ -2046,7 +2387,7 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
                 <span>Opponent&apos;s Turn</span>
               </div>
               <DeadlineTimer
-                gameState={gameState}
+                gameState={combatGameState}
                 iconSrc={timonImage}
                 nowMs={nowMs}
               />
@@ -2075,7 +2416,8 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
                     cell
                   );
                   const targeted =
-                    cellRevealPhaseVisible && gameState?.pendingTarget === cell;
+                    combatCellRevealPhaseVisible &&
+                    combatGameState.pendingTarget === cell;
 
                   return (
                     <div
@@ -2114,6 +2456,11 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
                   );
                 })}
               </div>
+              {resultRevealMessage && (
+                <div className="combat-result-overlay" aria-live="polite">
+                  <span>{resultRevealMessage}</span>
+                </div>
+              )}
             </div>
 
             <div className="setup-board-legend combat-legend" aria-hidden="true">
@@ -2148,7 +2495,13 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
                 <span className="label">Waiting for opponent</span>
                 <span className="combat-footer-copy">Defend your fleet</span>
               </div>
-              <span className="shield-mark" aria-hidden="true" />
+              <img
+                src={shieldImage}
+                alt=""
+                className="shield-mark"
+                aria-hidden="true"
+                draggable={false}
+              />
             </div>
 
             {phaseTimeoutMessage && (
@@ -2401,6 +2754,124 @@ export function GameWindow({ gameId, playerAddress }: GameWindowProps) {
             )}
             {setupTimeoutError && <div className="warning">{setupTimeoutError}</div>}
           </div>
+        </section>
+      </main>
+    );
+  }
+
+  if (gameState?.phase === PHASE_WAITING) {
+    const player1Label = currentRole === "player1" ? "Player 1 (You)" : "Player 1";
+    const player2Connected = !isZeroAddress(gameState.player2);
+
+    return (
+      <main className="page game-window-page waiting-player-page">
+        <section className="card game-window-card waiting-player-card">
+          <div className="waiting-player-content">
+            <header className="waiting-player-hero">
+              <div>
+                <p className="eyebrow">Game {gameId.toString()}</p>
+                <h1>Waiting for player 2</h1>
+                <p>Invite a friend to join or share the game ID.</p>
+              </div>
+
+              <img
+                src={artworkImage}
+                alt=""
+                className="waiting-player-artwork"
+                aria-hidden="true"
+                draggable={false}
+              />
+            </header>
+
+            <section className="waiting-game-id-panel" aria-label="Game ID">
+              <div className="waiting-id-detail">
+                <span className="waiting-icon-disc">
+                  <img
+                    src={lighthouseImage}
+                    alt=""
+                    aria-hidden="true"
+                    draggable={false}
+                  />
+                </span>
+                <span>
+                  <span className="waiting-id-label">Game ID</span>
+                  <strong>{gameId.toString()}</strong>
+                </span>
+              </div>
+
+              <button
+                type="button"
+                className="waiting-copy-button"
+                onClick={handleCopyGameId}
+              >
+                <img src={readStateIcon} alt="" aria-hidden="true" draggable={false} />
+                Copy ID
+              </button>
+            </section>
+
+            <div className="waiting-versus-divider" aria-hidden="true">
+              <span>VS</span>
+            </div>
+
+            <section className="waiting-player-grid" aria-label="Players">
+              <div className="waiting-player-panel">
+                <h2>{player1Label}</h2>
+                <p className="waiting-status waiting-status-connected">
+                  <span aria-hidden="true" />
+                  Connected
+                </p>
+
+                <div className="waiting-address-card">
+                  <img src={cannonImage} alt="" aria-hidden="true" draggable={false} />
+                  <strong>{gameState.player1}</strong>
+                </div>
+              </div>
+
+              <div className="waiting-player-panel waiting-player-panel-pending">
+                <h2>Player 2</h2>
+                <p
+                  className={
+                    player2Connected
+                      ? "waiting-status waiting-status-connected"
+                      : "waiting-status waiting-status-pending"
+                  }
+                >
+                  <span aria-hidden="true" />
+                  {player2Connected ? "Connected" : "Not connected"}
+                </p>
+
+                <div className="waiting-address-card waiting-address-card-empty">
+                  <img src={timonImage} alt="" aria-hidden="true" draggable={false} />
+                  <strong>
+                    {player2Connected
+                      ? gameState.player2
+                      : "Waiting for opponent to join..."}
+                  </strong>
+                </div>
+              </div>
+            </section>
+
+            <section className="waiting-share-band" aria-label="Share game ID">
+              <img
+                src={sendInviteImage}
+                alt=""
+                aria-hidden="true"
+                draggable={false}
+              />
+              <p>Share the game ID with your opponent so they can join the game.</p>
+            </section>
+          </div>
+
+          <footer className="waiting-player-footer">
+            <img
+              src={timonImage}
+              alt=""
+              className="waiting-footer-icon"
+              aria-hidden="true"
+              draggable={false}
+            />
+            <strong>Waiting for player 2 to connect...</strong>
+          </footer>
         </section>
       </main>
     );

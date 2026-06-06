@@ -1,5 +1,8 @@
 import { useState } from "react";
 
+import joinGameIcon from "../../Images/Join game.svg";
+import readStateIcon from "../../Images/Read state.svg";
+import timonImage from "../../Images/Timon.png";
 import { GameStatePanel } from "./GameStatePanel";
 import {
   assertCorrectChain,
@@ -49,7 +52,6 @@ export function LobbyActions({
   >(null);
   const [statusType, setStatusType] = useState<StatusType>("idle");
   const [statusMessage, setStatusMessage] = useState("");
-  const [txHash, setTxHash] = useState<string | null>(null);
   const [gameState, setGameState] = useState<BattleshipGameState | null>(null);
 
   const actionsReady = connected && correctChain;
@@ -71,7 +73,6 @@ export function LobbyActions({
       setLoadingAction("create");
       setStatusType("info");
       setStatusMessage("Preparing create-game transaction...");
-      setTxHash(null);
 
       await assertCorrectChain();
 
@@ -101,7 +102,6 @@ export function LobbyActions({
       for (const timer of walletPromptTimers) window.clearTimeout(timer);
       walletPromptTimers = [];
 
-      setTxHash(hash);
       setStatusType("info");
       setStatusMessage("Create transaction sent. Waiting for confirmation...");
       devLog("lobby:createGame:txSent", { hash, address });
@@ -131,7 +131,7 @@ export function LobbyActions({
       });
 
       setStatusType("success");
-      setStatusMessage(`Game created successfully. gameId = ${createdGameId}`);
+      setStatusMessage("Game created successfully.");
       onGameUpdated(createdGameId);
     } catch (error) {
       devLog("lobby:createGame:error", { error });
@@ -163,7 +163,6 @@ export function LobbyActions({
       setLoadingAction("join");
       setStatusType("info");
       setStatusMessage("Checking game before joining...");
-      setTxHash(null);
 
       await assertCorrectChain();
 
@@ -227,7 +226,6 @@ export function LobbyActions({
       for (const timer of walletPromptTimers) window.clearTimeout(timer);
       walletPromptTimers = [];
 
-      setTxHash(hash);
       setStatusType("info");
       setStatusMessage("Join transaction sent. Waiting for confirmation...");
       devLog("lobby:joinGame:txSent", { gameId, hash, address });
@@ -276,7 +274,6 @@ export function LobbyActions({
       setLoadingAction("read");
       setStatusType("info");
       setStatusMessage("Reading game state...");
-      setTxHash(null);
 
       await assertCorrectChain();
 
@@ -305,37 +302,78 @@ export function LobbyActions({
   }
 
   return (
-    <section className="panel-block">
-      <h2>Lobby</h2>
-
-      <div className="actions">
-        <button
-          onClick={handleCreateGame}
-          disabled={!actionsReady || loadingAction !== null}
-        >
-          {loadingAction === "create" ? "Creating..." : "Create Game"}
-        </button>
+    <section className="lobby-panel-card">
+      <div className="lobby-panel-heading">
+        <img
+          src={timonImage}
+          alt=""
+          className="lobby-panel-heading-icon"
+          aria-hidden="true"
+          draggable={false}
+        />
+        <h2>Lobby</h2>
       </div>
 
-      <div className="inline-input spaced-top">
-        <input
-          type="text"
-          value={joinGameIdInput}
-          onChange={(event) => setJoinGameIdInput(event.target.value)}
-          placeholder="Game ID to join"
-        />
-        <button
-          onClick={handleJoinGame}
-          disabled={!actionsReady || loadingAction !== null}
-        >
-          {loadingAction === "join" ? "Joining..." : "Join Game"}
-        </button>
-        <button
-          onClick={handleReadGameState}
-          disabled={!actionsReady || loadingAction !== null}
-        >
-          {loadingAction === "read" ? "Reading..." : "Read State"}
-        </button>
+      <div className="lobby-action-columns">
+        <div className="lobby-action-column">
+          <h3>Create a new game</h3>
+          <i aria-hidden="true" />
+          <p>You will be assigned a new game ID that another player can join.</p>
+
+          <button
+            className="lobby-button lobby-primary-button lobby-create-button"
+            onClick={handleCreateGame}
+            disabled={!actionsReady || loadingAction !== null}
+          >
+            <span className="lobby-ui-icon lobby-icon-plus" aria-hidden="true" />
+            {loadingAction === "create" ? "Creating..." : "Create Game"}
+          </button>
+        </div>
+
+        <div className="lobby-action-column lobby-join-column">
+          <h3>Join an existing game</h3>
+          <i aria-hidden="true" />
+          <p>Enter a game ID to join an open game and challenge another player.</p>
+
+          <input
+            className="lobby-game-input"
+            type="text"
+            value={joinGameIdInput}
+            onChange={(event) => setJoinGameIdInput(event.target.value)}
+            placeholder="Enter Game ID"
+          />
+
+          <div className="lobby-join-buttons">
+            <button
+              className="lobby-button lobby-primary-button"
+              onClick={handleJoinGame}
+              disabled={!actionsReady || loadingAction !== null}
+            >
+              <img
+                src={joinGameIcon}
+                alt=""
+                className="lobby-image-icon lobby-button-icon"
+                aria-hidden="true"
+                draggable={false}
+              />
+              {loadingAction === "join" ? "Joining..." : "Join Game"}
+            </button>
+            <button
+              className="lobby-button lobby-secondary-button"
+              onClick={handleReadGameState}
+              disabled={!actionsReady || loadingAction !== null}
+            >
+              <img
+                src={readStateIcon}
+                alt=""
+                className="lobby-image-icon lobby-button-icon"
+                aria-hidden="true"
+                draggable={false}
+              />
+              {loadingAction === "read" ? "Reading..." : "Read State"}
+            </button>
+          </div>
+        </div>
       </div>
 
       {!connected && (
@@ -349,13 +387,6 @@ export function LobbyActions({
       {statusMessage && (
         <div className={statusType === "success" ? "success" : "warning"}>
           {statusMessage}
-        </div>
-      )}
-
-      {txHash && (
-        <div className="contract-box">
-          <span className="label">Latest tx hash</span>
-          <strong>{txHash}</strong>
         </div>
       )}
 
