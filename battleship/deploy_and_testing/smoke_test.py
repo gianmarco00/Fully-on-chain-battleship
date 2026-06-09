@@ -1,3 +1,6 @@
+import os
+
+from web3 import Web3
 from web3.logs import DISCARD
 
 from battleship.deploy_and_testing.utils.board import (
@@ -18,7 +21,7 @@ from battleship.deploy_and_testing.utils.contract import (
     require_contract_code,
     send_estimated_tx,
 )
-from rps_backend.utils.chain import connect_web3
+from rps_backend.utils.config import EXPECTED_CHAIN_ID, NODE_URL
 from rps_backend.utils.wallets import load_wallet
 
 
@@ -41,6 +44,52 @@ PLAYER2_PLACEMENTS = (
 PHASE_ATTACK = 3
 PHASE_AUDIT = 5
 
+DEFAULT_SMOKE_RPC_URL = "http://130.60.144.77:8554/"
+
+GAS_REPORT_ACTIONS = (
+    "createGame",
+    "joinGame",
+    "commitBoard",
+    "revealRandomness",
+    "attackCell",
+    "revealCell miss",
+    "revealCell hit",
+    "revealFinalBoard",
+)
+
+
+def connect_smoke_web3() -> Web3:
+    configured_rpc_url = os.getenv("BATTLESHIP_RPC_URL") or os.getenv("UZHETH_RPC_URL")
+    rpc_urls = [configured_rpc_url] if configured_rpc_url else [
+        DEFAULT_SMOKE_RPC_URL,
+        NODE_URL,
+    ]
+    last_error: Exception | None = None
+
+    for rpc_url in rpc_urls:
+        if not rpc_url:
+            continue
+
+        w3 = Web3(Web3.HTTPProvider(rpc_url, request_kwargs={"timeout": 20}))
+
+        if not w3.is_connected():
+            last_error = ConnectionError(f"Could not connect to UZHETH RPC at {rpc_url}.")
+            continue
+
+        chain_id = w3.eth.chain_id
+        if chain_id != EXPECTED_CHAIN_ID:
+            raise RuntimeError(
+                f"Connected to wrong chain. Expected {EXPECTED_CHAIN_ID}, got {chain_id}."
+            )
+
+        print("RPC URL:", rpc_url)
+        return w3
+
+    if last_error:
+        raise last_error
+
+    raise ConnectionError("No UZHETH RPC URL configured.")
+
 
 def placement_text(placements: tuple[ShipPlacement, ...]) -> str:
     return ", ".join(
@@ -49,7 +98,51 @@ def placement_text(placements: tuple[ShipPlacement, ...]) -> str:
     )
 
 
-def send(w3, contract, wallet, function_call, label: str):
+def record_gas(
+    gas_samples: dict[str, list[int]],
+    action: str | None,
+    receipt,
+) -> None:
+    if action is None:
+        return
+
+    gas_samples.setdefault(action, []).append(int(receipt["gasUsed"]))
+
+
+def print_gas_report(gas_samples: dict[str, list[int]]) -> None:
+    print("\nGas usage summary for report:")
+    print(f"{'Action':<22} {'Gas used':>10}  Notes")
+    print("-" * 58)
+
+    for action in GAS_REPORT_ACTIONS:
+        samples = gas_samples.get(action, [])
+
+        if not samples:
+            print(f"{action:<22} {'missing':>10}")
+            continue
+
+        chosen_gas = max(samples)
+
+        if len(samples) == 1:
+            note = "single transaction"
+        else:
+            note = (
+                f"max of {len(samples)} transactions "
+                f"(samples: {', '.join(str(sample) for sample in samples)})"
+            )
+
+        print(f"{action:<22} {chosen_gas:>10}  {note}")
+
+
+def send(
+    w3,
+    contract,
+    wallet,
+    function_call,
+    label: str,
+    gas_samples: dict[str, list[int]],
+    report_action: str | None = None,
+):
     receipt = send_estimated_tx(
         w3=w3,
         function_call=function_call,
@@ -57,6 +150,7 @@ def send(w3, contract, wallet, function_call, label: str):
         label=label,
         minimum_gas=BATTLESHIP_GAS_LIMIT,
     )
+    record_gas(gas_samples, report_action, receipt)
 
     for event_type in (
         contract.events.GameCreated(),
@@ -85,8 +179,10 @@ def attack_and_reveal(
     defender_board,
     game_id: int,
     cell: int,
+    gas_samples: dict[str, list[int]],
 ) -> None:
     hit = has_ship(defender_board.ship_mask, cell)
+    reveal_action = "revealCell hit" if hit else "revealCell miss"
 
     print(
         f"\n{attacker_wallet.role} attacks {cell_label(cell)} "
@@ -98,6 +194,8 @@ def attack_and_reveal(
         contract,
         attacker_wallet,
         contract.functions.attackCell(game_id, cell),
+        "attackCell",
+        gas_samples,
         "attackCell",
     )
 
@@ -114,17 +212,20 @@ def attack_and_reveal(
             defender_board.salts[cell],
             proof,
         ),
-        "revealCell",
+        reveal_action,
+        gas_samples,
+        reveal_action,
     )
 
 
 def main() -> None:
     print("=== Battleship smoke test ===")
 
-    w3 = connect_web3()
+    w3 = connect_smoke_web3()
     player1 = load_wallet("player1")
     player2 = load_wallet("player2")
     contract = load_battleship_contract(w3)
+    gas_samples: dict[str, list[int]] = {}
 
     print("Contract:", contract.address)
     print("Player 1:", player1.address)
@@ -190,14 +291,32 @@ def main() -> None:
     print("  player2 first move secret:", short_hex(player2_random_secret))
     print("  player2 first move commit:", short_hex(player2_random_commit))
 
-    send(w3, contract, player1, contract.functions.createGame(), "createGame")
-    send(w3, contract, player2, contract.functions.joinGame(game_id), "joinGame")
+    send(
+        w3,
+        contract,
+        player1,
+        contract.functions.createGame(),
+        "createGame",
+        gas_samples,
+        "createGame",
+    )
+    send(
+        w3,
+        contract,
+        player2,
+        contract.functions.joinGame(game_id),
+        "joinGame",
+        gas_samples,
+        "joinGame",
+    )
     send(
         w3,
         contract,
         player1,
         contract.functions.commitBoard(game_id, board1.root, player1_random_commit),
         "commitBoard player1",
+        gas_samples,
+        "commitBoard",
     )
     send(
         w3,
@@ -205,6 +324,8 @@ def main() -> None:
         player2,
         contract.functions.commitBoard(game_id, board2.root, player2_random_commit),
         "commitBoard player2",
+        gas_samples,
+        "commitBoard",
     )
 
     print("\nPlayers reveal first-move randomness.")
@@ -214,6 +335,8 @@ def main() -> None:
         player1,
         contract.functions.revealRandomness(game_id, player1_random_secret),
         "revealRandomness player1",
+        gas_samples,
+        "revealRandomness",
     )
     send(
         w3,
@@ -221,6 +344,8 @@ def main() -> None:
         player2,
         contract.functions.revealRandomness(game_id, player2_random_secret),
         "revealRandomness player2",
+        gas_samples,
+        "revealRandomness",
     )
 
     game = contract.functions.getGame(game_id).call()
@@ -256,6 +381,7 @@ def main() -> None:
                 defender_board=board2,
                 game_id=game_id,
                 cell=target_cell,
+                gas_samples=gas_samples,
             )
         elif current_attacker == player2.address.lower():
             if player2_miss_index >= len(player2_miss_cells):
@@ -272,6 +398,7 @@ def main() -> None:
                 defender_board=board1,
                 game_id=game_id,
                 cell=target_cell,
+                gas_samples=gas_samples,
             )
         else:
             raise RuntimeError(f"Unexpected current attacker: {game[4]}")
@@ -287,6 +414,8 @@ def main() -> None:
             board1.ship_start_cells,
             board1.ship_horizontal,
         ),
+        "revealFinalBoard",
+        gas_samples,
         "revealFinalBoard",
     )
 
@@ -306,6 +435,8 @@ def main() -> None:
         raise RuntimeError(
             f"Smoke test hit counts are not the expected 0 / {FLEET_CELL_COUNT}."
         )
+
+    print_gas_report(gas_samples)
 
     print("\nSmoke test passed.")
 

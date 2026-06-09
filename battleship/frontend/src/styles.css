@@ -219,6 +219,7 @@ h3 {
 .lobby-card {
   --lobby-content-width: 790px;
   width: min(890px, 100%);
+  zoom: 0.8;
   border: 1px solid rgb(215 230 245 / 64%);
   border-radius: 22px;
   padding: 50px 44px 52px;
@@ -1539,6 +1540,10 @@ h3 {
     radial-gradient(circle at 18% 16%, rgb(245 247 250 / 78%), transparent 24%),
     linear-gradient(180deg, #ffffff 0%, var(--mist) 100%);
   box-shadow: 0 14px 42px rgb(11 42 85 / 8%);
+}
+
+.board-setup-page:not(.combat-page) .board-setup-card {
+  zoom: 0.8;
 }
 
 .board-setup-shell {
